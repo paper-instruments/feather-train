@@ -31,7 +31,7 @@ In a new document, use built-in heading styles in a logical hierarchy, and simpl
 
 ### Building a net-new document
 
-Professional writing is short. A document answering a bounded question gives its answer at the start, and the rest carries only what a reader needs to act on it. A length the user gives is a ceiling to be respected. Write with a word budget in mind: a page of 12-pt single-spaced body text holds about 450 words, fewer once headings, tables, and a memo or title block take their space. Keep type at the house sizes.
+Professional writing is short. A document answering a bounded question gives its answer at the start, and the rest carries only what a reader needs to act on it. A length the user gives is to be respected. Set a word budget from it before drafting: a page of 12-pt single-spaced body text holds roughly 450 words, fewer once headings, tables, and a memo or title block take their space. Be mindful of word count as you draft, and keep type at the house sizes.
 
 Define named styles for the title, headings, body, and block quotations before writing, set 1-inch margins, and apply all formatting through those styles. One typeface covers every style, including the title, headings, headers, and footers. All text is black. Headings are bold, with at most two levels, and the document has no colored text, shaded boxes, or fills.
 
