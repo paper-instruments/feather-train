@@ -24,7 +24,7 @@ PDF work covers export verification, tagging, reading order, bookmarks, links, f
 
 ### Visual review
 
-When layout matters, view the rendered pages at readable resolution: an overview for continuity, then detail on tables, charts, signatures, footnotes, dense appendices, and pages that structural checks flagged.
+When layout matters, view the rendered pages at readable resolution: an overview for continuity, then detail on tables, charts, signatures, footnotes, dense appendices, and pages that structural checks flagged. Render only the pages a check needs, such as `pdftoppm -png -r 150 -f 3 -l 4 report.pdf page`, and read the resulting PNGs. For fine detail, render one page at a higher resolution and crop it to the region, such as `pdftoppm -png -r 300 -f 3 -l 3 -x 300 -y 300 -W 1500 -H 600 report.pdf detail`, where the crop box is in pixels at that resolution. To review a DOCX, PPTX, or XLSX file the same way, convert it to PDF first with `soffice --headless --convert-to pdf deck.pptx`.
 
 ### Examples
 

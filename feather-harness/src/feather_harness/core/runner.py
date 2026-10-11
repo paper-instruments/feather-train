@@ -34,6 +34,9 @@ from .model import (
     ModelCall,
     ModelRefusalError,
     ModelSettings,
+    ProviderUsage,
+    UsageTotals,
+    summarize_usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +62,7 @@ RECOVERY_FEEDBACK = {
 }
 # Finish reasons that mean the provider stopped the response before it was complete.
 _INTERRUPTED_FINISHES = frozenset({"length", "error", "content_filter"})
+_COMPACTION_MAX_ATTEMPTS = 4
 
 
 class RunRequest(FrozenModel):
@@ -71,6 +75,8 @@ class TraceSegment(FrozenModel):
     kind: Literal["execution", "compaction"]
     input: tuple[Message, ...]
     messages: tuple[Message, ...]
+    # One record per assistant message this segment's model calls produced, in order.
+    calls: tuple[ProviderUsage, ...] = ()
 
 
 class RunResult(FrozenModel):
@@ -87,6 +93,10 @@ class RunResult(FrozenModel):
         """Original conversation, without summary calls or repeated context."""
         return _execution_messages(self.segments)
 
+    def usage(self) -> UsageTotals:
+        """Provider-billed usage over every model call, summaries included."""
+        return summarize_usage([call for segment in self.segments for call in segment.calls])
+
 
 class AgentRunError(RuntimeError):
     def __init__(self, message: str, *, cause: Exception, result: RunResult):
@@ -101,6 +111,7 @@ class _RunState:
     input_count: int
     kind: Literal["execution", "compaction"] = "execution"
     segments: list[TraceSegment] = field(default_factory=list)
+    calls: list[ProviderUsage] = field(default_factory=list)
     accounting: Accounting = field(default_factory=Accounting)
     recoveries: int = 0
 
@@ -109,7 +120,13 @@ class _RunState:
             kind=self.kind,
             input=tuple(self.context[: self.input_count]),
             messages=tuple(self.context[self.input_count :]),
+            calls=tuple(self.calls),
         )
+
+    def append_call(self, call: ModelCall) -> None:
+        self.context.append(call.assistant)
+        if call.usage is not None:
+            self.calls.append(call.usage)
 
     def start_segment(
         self, kind: Literal["execution", "compaction"], messages: list[Message]
@@ -118,6 +135,7 @@ class _RunState:
         self.kind = kind
         self.context = messages
         self.input_count = len(messages)
+        self.calls = []
 
     def result(
         self,
@@ -163,7 +181,6 @@ class FeatherAgent:
         # Production policy: one recovery from a cut-off or empty response per run, and
         # no summary from an interrupted compaction call. Off keeps the original loop.
         self.response_recovery = response_recovery
-        # A caller may complete a run after its tools finish, without another model turn.
         self.end_run_after_tools = end_run_after_tools
 
     async def run(self, request: RunRequest) -> RunResult:
@@ -206,28 +223,49 @@ class FeatherAgent:
                         elif recent_turns <= len(turn_tool_states):
                             tool_state = turn_tool_states[-recent_turns]
                         # Supplied history has no pre-turn snapshots; never substitute live state.
-                    state.start_segment(
-                        "compaction",
-                        [
-                            SystemMessage(content=DEFAULT_POLICY_COMPACTION_SYSTEM_PROMPT),
-                            *summary_input,
-                        ],
-                    )
-                    summary_call = await self.model.complete(
-                        state.context,
-                        settings=request.model_settings.model_copy(update={"max_tokens": 65536}),
-                        kind="compaction",
-                    )
-                    state.context.append(summary_call.assistant)
-                    if self.response_recovery and (
-                        summary_call.finish_reason in _INTERRUPTED_FINISHES
-                        or summary_call.assistant.refusal
-                    ):
-                        raise ValueError(
-                            "compaction summary is incomplete "
-                            f"(finish_reason={summary_call.finish_reason})"
+                    # Signed and encrypted reasoning belongs to the conversation that produced it,
+                    # so it does not cross into the summary request or the compacted context.
+                    summary_input = _without_preserved_reasoning(summary_input)
+                    recent = _without_preserved_reasoning(recent)
+                    compaction_input = [
+                        SystemMessage(content=DEFAULT_POLICY_COMPACTION_SYSTEM_PROMPT),
+                        *summary_input,
+                    ]
+                    for attempt in range(1, _COMPACTION_MAX_ATTEMPTS + 1):
+                        state.start_segment("compaction", list(compaction_input))
+                        summary_call = await self.model.complete(
+                            state.context,
+                            settings=request.model_settings.model_copy(
+                                update={"max_tokens": self.compaction.max_tokens}
+                            ),
+                            kind="compaction",
                         )
-                    summary = build_summary(summary_call.assistant.content, tool_state)
+                        state.append_call(summary_call)
+                        if self.response_recovery and (
+                            summary_call.finish_reason == "content_filter"
+                            or summary_call.assistant.refusal
+                        ):
+                            raise ValueError(
+                                "compaction summary is incomplete "
+                                f"(finish_reason={summary_call.finish_reason})"
+                            )
+                        try:
+                            if self.response_recovery and summary_call.finish_reason in {
+                                "length", "error"
+                            }:
+                                raise ValueError(
+                                    "compaction summary is incomplete "
+                                    f"(finish_reason={summary_call.finish_reason})"
+                                )
+                            summary = build_summary(summary_call.assistant.content, tool_state)
+                            break
+                        except ValueError as exc:
+                            if attempt == _COMPACTION_MAX_ATTEMPTS:
+                                raise
+                            logger.warning(
+                                "Compaction summary failed (attempt %d/%d); retrying: %s",
+                                attempt, _COMPACTION_MAX_ATTEMPTS, exc,
+                            )
                     context = [*system_messages, *prefix, summary, *recent]
                 except Exception as exc:
                     raise AgentRunError(
@@ -251,8 +289,11 @@ class FeatherAgent:
                 )
             except ModelBehaviorError as exc:
                 return state.result(stop_reason="ModelBehaviorError", stop_message=str(exc))
-            state.context.append(call.assistant)
-            state.accounting.record_turn(call.input_tokens + call.output_tokens, len(state.context))
+            state.append_call(call)
+            context_tokens = call.input_tokens + call.output_tokens
+            if self.compaction.exclude_unreplayed_reasoning:
+                context_tokens -= call.unreplayed_reasoning_tokens
+            state.accounting.record_turn(context_tokens, len(state.context))
             if self.response_recovery:
                 cause = _failure_cause(call)
                 if cause is not None:
@@ -319,6 +360,13 @@ def _failure_cause(call: ModelCall) -> str | None:
     if not tool_calls and not (content and content.strip()):
         return "empty"
     return None
+
+
+def _without_preserved_reasoning(messages: list[Message]) -> list[Message]:
+    return [
+        message.without_preserved_reasoning() if isinstance(message, AssistantMessage) else message
+        for message in messages
+    ]
 
 
 def _execution_messages(segments: tuple[TraceSegment, ...]) -> tuple[Message, ...]:

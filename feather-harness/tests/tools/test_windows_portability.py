@@ -112,13 +112,6 @@ def test_windows_workspace_reads_do_not_require_posix_user_ids(tmp_path, monkeyp
     assert metadata is not None
 
 
-def test_windows_spill_without_secure_file_apis_keeps_the_complete_response(tmp_path, monkeypatch):
-    monkeypatch.setattr(_files, "os", SimpleNamespace(name="nt"))
-    content = "x" * (_files.MAX_OUTPUT_CHARS + 100)
-
-    assert _files.save_output_preview(content, workspace=tmp_path) == (content, "", "", None)
-
-
 @pytest.mark.skipif(os.name == "nt", reason="POSIX no-follow writes")
 @pytest.mark.parametrize("swap_parent", [False, True], ids=["file", "parent"])
 def test_safe_write_rejects_symlinks_swapped_in_after_validation(tmp_path, swap_parent):
@@ -212,3 +205,44 @@ def test_search_displays_granted_paths_on_another_windows_drive(monkeypatch):
 
     assert search.display_path("D:/allowed/notes.txt") == "D:/allowed/notes.txt"
     assert search.display_path("C:/workspace/notes.txt") == "notes.txt"
+
+
+def test_file_paths_and_saved_output_without_posix_apis(tmp_path, monkeypatch):
+    missing = {"getuid", "O_DIRECTORY", "O_NOFOLLOW", "fchmod"}
+    windows_os = SimpleNamespace(**{name: getattr(os, name) for name in dir(os) if name not in missing})
+    windows_os.name = "nt"
+    monkeypatch.setattr(_files, "os", windows_os)
+    monkeypatch.setattr(_files.tempfile, "gettempdir", lambda: str(tmp_path))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("hello")
+
+    candidate, _, metadata = _files.require_path(workspace, (), "notes.txt")
+    assert candidate == workspace / "notes.txt"
+    assert metadata is not None
+
+    content = "x" * (_files.MAX_OUTPUT_CHARS + 100)
+    head, notice, tail, saved_path = _files.save_output_preview(content, workspace=workspace)
+    assert len(head + notice + tail) <= _files.MAX_OUTPUT_CHARS
+    assert saved_path is not None
+    assert Path(saved_path).read_text() == content
+    assert _files.require_path(workspace, (), saved_path)[0] == Path(saved_path)
+    with pytest.raises(_files.FileToolError):
+        _files.require_write_target(workspace, (), saved_path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="simulate junctions with POSIX symlinks")
+def test_output_directory_junction_does_not_grant_its_target(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("private")
+    directory = tmp_path / "tool_output"
+    directory.symlink_to(outside, target_is_directory=True)
+    is_symlink = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda path: False if path == directory else is_symlink(path))
+    monkeypatch.setattr(_files, "_output_directory", lambda root: directory)
+
+    with pytest.raises(_files.FileToolError):
+        _files.require_file(workspace, (), str(directory / "secret.txt"))

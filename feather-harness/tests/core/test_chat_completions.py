@@ -4,13 +4,14 @@ import json
 
 import httpx
 import pytest
-from openai import APIConnectionError, AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 
 from feather_harness import (
     AgentRunError,
     ChatCompletionsModel,
     FeatherAgent,
     ModelSettings,
+    RetryPolicy,
     RunRequest,
     Tool,
     ToolMessage,
@@ -204,3 +205,117 @@ async def test_provider_failure_preserves_completed_tool_work_without_replaying_
         "tool_call_id": "edit-1",
         "content": "File updated.",
     }
+
+
+def _sse(*chunks):
+    events = [
+        {"id": "s", "object": "chat.completion.chunk", "created": 0, "model": "model", **c}
+        for c in chunks
+    ]
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+
+
+def _delta(finish_reason=None, **delta):
+    return {"choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}]}
+
+
+async def test_streamed_response_is_assembled_like_a_nonstreamed_one():
+    requests = []
+
+    async def respond(req):
+        requests.append(json.loads(req.content))
+        return _sse(
+            _delta(role="assistant", reasoning="think "),
+            _delta(reasoning="more", content="Editing"),
+            _delta(
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "edit", "arguments": '{"file":'},
+                    }
+                ]
+            ),
+            _delta(tool_calls=[{"index": 0, "function": {"arguments": '"a.txt"}'}}]),
+            _delta(finish_reason="tool_calls"),
+            {
+                "choices": [],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
+            },
+        )
+
+    async with AsyncOpenAI(
+        api_key="test",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        result = await ChatCompletionsModel(client=client, model="model", stream=True).complete(
+            [UserMessage(content="task")], settings=ModelSettings()
+        )
+    assert requests[0]["stream"] is True
+    assert requests[0]["stream_options"] == {"include_usage": True}
+    assert result.assistant.content == "Editing"
+    assert result.assistant.reasoning_content == "think more"
+    assert [(c.id, c.name, c.arguments) for c in result.assistant.tool_calls] == [
+        ("c1", "edit", '{"file":"a.txt"}')
+    ]
+    assert (result.finish_reason, result.input_tokens, result.output_tokens) == ("tool_calls", 9, 4)
+
+
+async def test_transient_failures_are_retried_and_client_errors_are_not():
+    replies = [
+        httpx.Response(
+            503, headers={"retry-after": "0"}, json={"error": {"message": "scaling up"}}
+        ),
+        _sse(_delta(content="cut off")),
+        _sse(_delta(content="done", finish_reason="stop")),
+        httpx.Response(400, json={"error": {"message": "bad request"}}),
+    ]
+    requests = []
+
+    async def respond(req):
+        requests.append(req)
+        return replies[len(requests) - 1]
+
+    async with AsyncOpenAI(
+        api_key="test",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        model = ChatCompletionsModel(
+            client=client, model="model", stream=True, retry=RetryPolicy(base_backoff_seconds=0)
+        )
+        result = await model.complete([UserMessage(content="task")], settings=ModelSettings())
+        assert result.assistant.content == "done"
+        assert len(requests) == 3
+        with pytest.raises(APIStatusError):
+            await model.complete([UserMessage(content="task")], settings=ModelSettings())
+    assert len(requests) == 4
+
+
+async def test_stream_ending_in_provider_error_is_retried():
+    """OpenRouter's finish_reason "error" once aborted a 475-rubric eval run (2026-10-10)."""
+    replies = [
+        _sse(_delta(content="partial"), _delta(finish_reason="error")),
+        _sse(_delta(content="done", finish_reason="stop")),
+    ]
+    requests = []
+
+    async def respond(req):
+        requests.append(req)
+        return replies[len(requests) - 1]
+
+    async with AsyncOpenAI(
+        api_key="test",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        model = ChatCompletionsModel(
+            client=client, model="model", stream=True,
+            retry=RetryPolicy(max_attempts=2, base_backoff_seconds=0, max_backoff_seconds=0),
+        )
+        result = await model.complete([UserMessage(content="task")], settings=ModelSettings())
+    assert len(requests) == 2
+    assert (result.assistant.content, result.finish_reason) == ("done", "stop")

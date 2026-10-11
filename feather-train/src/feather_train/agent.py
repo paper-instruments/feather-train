@@ -29,17 +29,8 @@ if TYPE_CHECKING:
     from feather_train.observability.braintrust import BraintrustRollout
 
 PROCESS_TOOLS = ("bash", "task_list", "task_output", "task_stop")
-# view_image is offered only when enable_image_tools is also on; evals whose benchmark supplies
-# its own image tools omit it from their selection.
-DEFAULT_TOOLS = (
-    *PROCESS_TOOLS, "read", "edit", "write", "grep", "glob", "todo_write", "view_image"
-)
+DEFAULT_TOOLS = (*PROCESS_TOOLS, "read", "edit", "write", "grep", "glob", "todo_write")
 SUPPORTED_TOOLS = (*DEFAULT_TOOLS, *WEB_TOOL_NAMES)
-E2B_HOST_FACTS = (
-    "This is a headless run with no live user-interaction, status, or approval channel. "
-    "Shell commands run inside an isolated task sandbox. "
-    "Check the environment before relying on a renderer or calculation engine."
-)
 
 
 @dataclass
@@ -80,9 +71,7 @@ async def run_e2b(
     if profile == "prod":
         system_instructions = build_production_instructions(
             skills_root=SKILLS_ROOT,
-            enable_image_tools=enable_image_tools,
             task_instructions=instructions,
-            host_facts=E2B_HOST_FACTS,
         )
         compaction = production_compaction(compaction)
     else:
@@ -95,7 +84,7 @@ async def run_e2b(
         max_turns=max_turns,
         model_settings=model_settings,
     )
-    files = FileTools(transport, enable_image_reads=profile == "prod" and enable_image_tools)
+    files = FileTools(transport, enable_image_reads=enable_image_tools)
     processes = ProcessTools(transport)
     todos = TodoList()
     builtins = (
@@ -115,10 +104,8 @@ async def run_e2b(
             raise ValueError("Web tools require a web provider")
         builtins = (*builtins, web_search_tool(web_provider), web_fetch_tool(web_provider))
     builtins = tuple(tool for tool in builtins if tool.spec.name in tools)
-    if enable_image_tools and "view_image" in tools:
-        builtins = (*builtins, files.view_image_tool())
     if profile == "prod":
-        builtins = production_tools(builtins, enable_image_tools=enable_image_tools)
+        builtins = production_tools(builtins, image_reads=enable_image_tools)
 
     async def run(mcp_tools: tuple[Tool, ...]) -> RunResult:
         selected = (*mcp_tools, *builtins)

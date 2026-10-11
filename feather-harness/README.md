@@ -7,7 +7,7 @@ and PDFs using specialized Paper packages.
 - **Knowledge-work skills:** bundled workflows and API references for working with
   Word documents, Excel spreadsheets, PowerPoint presentations, and PDFs.
 - **Tools:** file editing, search, shell execution, background tasks, todo lists,
-  and connections to MCP servers.
+  connections to MCP servers, and optional Exa web search and fetch.
 - **Long-running tasks:** context compaction summarizes earlier work while retaining
   recent turns and todo state.
 - **CLI and library:** run against an OpenAI-compatible Chat Completions endpoint
@@ -83,16 +83,38 @@ tools. It requires an image-capable endpoint unless `enable_image_tools` is expl
 training prompt, original manuals and descriptions, and disabled images. Profiles are
 fixed at startup. See [profiles](docs/profiles.md) for compatibility details.
 
-Both CLI profiles use the OpenAI SDK's two retries for eligible transient inference
-failures (at most three attempts per request), including its backoff and jitter.
+Both CLI profiles stream model responses and retry transient inference failures with
+the Fireworks training sampler's policy: up to seven attempts per request with 2-30
+second jittered exponential backoff, honoring `Retry-After` up to the cap. Connection
+errors, timeouts, streams that end without a finish reason, and HTTP 408, 429, 500,
+502, 503 and 504 are retried; other client errors are not. Streaming makes the client's
+request timeout an idle timeout, so a long generation that keeps producing tokens is not
+cut off and resent unchanged. `model_retry` in the JSON config overrides the policy.
 This does not replay a tool or restart a trajectory. Library callers retain ownership
-of their supplied client's retry policy. Upgrading the CLI changes the old zero-retry
-evaluation condition even with `train`. Editable workspace dependencies use the checked-out
+of their supplied client's retry policy and stay nonstreaming unless they opt in. Editable workspace dependencies use the checked-out
 source; unchanged package versions do not isolate new builds from this change.
+
+Each compaction allows three retries after its initial summary request (four attempts
+total) when the model returns an empty summary. With production response validation
+enabled, summaries interrupted by `length` or `error` are also retried; refusals and
+content filtering remain fatal. Each attempt receives the same input and settings,
+and its response is retained in a separate compaction trace segment. Completed tools
+are not replayed, only successful compactions are counted, and exhaustion preserves
+the original execution evidence in `AgentRunError`. Transport failures keep the model
+or supplied client's existing retry policy; compaction does not multiply that budget.
+
+`additional_instructions` appends generic guidance to the system prompt, expanding
+`{{ workspace }}` to the resolved workspace path while preserving task text. Set
+`eval_prompt_output` to save the selected profile and SHA-256 of the actual system
+prompt before model execution. `enable_web_tools: true` adds Exa-backed `web_search`
+and `web_fetch`, using `EXA_API_KEY`; library callers pass a `web_provider` to `run_local`.
+An optional `prompt_token_budget` configures local GLM tokenizer accounting; install
+`feather-harness[token-count]` for the pinned tokenizer dependencies.
 
 Feather installs bundled skills under `.agents` and saves shell logs under
 `.feather/tasks` in the workspace. `skills_dir` copies task-provided skills after
-bundled installation. MCP connections support HTTP/SSE and stdio transports.
+bundled installation. Both `.agents/` and `.feather/` are added to the checkout's local
+Git exclude file to keep harness state out of patch submissions. MCP connections support HTTP/SSE and stdio transports.
 
 Parallel subagents are opt-in for `prod`. Add `"subagents": {"max_concurrent": 3,
 "max_agents": 8, "max_turns": 50}` to JSON config, or pass a `SubagentConfig` to
@@ -136,6 +158,12 @@ This minimal example has no tools. `run_local` assembles the CLI's local tools a
 selected profile; custom callers can bind `Tool` objects themselves. See
 the [tool reference](docs/tools.md) for file revisions, Bash tasks, and todo semantics.
 
+`TraceSegment.calls` records provider usage for execution and compaction calls.
+`RunResult.usage()` totals those records, including cached and reasoning tokens and
+provider-reported costs. Missing provider fields remain unknown rather than being
+reported as zero. Native signed/encrypted reasoning is replayed within an execution
+window and removed when compaction replaces that window's context.
+
 Custom callers can pass `end_run_after_tools(message, results)` to `FeatherAgent`.
 This synchronous hook receives the assistant message and a tuple of `ToolResult`
 objects in tool-call order after all of that message's tools have run. Returning
@@ -165,16 +193,19 @@ Linux-specific process tests skip on macOS.
 
 ### Image inspection
 
-`prod` enables `view_image`, image reads, and MCP images by default. Set
+`prod` enables image reads through `read` and MCP images by default. Set
 `enable_image_tools: false` for a text-only endpoint; model names are not used to infer
-capabilities. Supported images are PNG/JPEG/GIF/WebP up to 10 MiB. Audio remains
-unsupported. Render document pages with the document skills when useful before
-inspecting them; installed manuals do not guarantee a working renderer.
+capabilities. `read` accepts PNG/JPEG/GIF/WebP, and converts BMP/TIFF, up to 20 MB of
+input. Like Claude Code and ZCode, it downscales images to at most 2000 px on the longest
+side and re-encodes them to at most 5 MB of base64, telling the model the original and
+displayed sizes. Resizing uses Pillow when the execution environment has it; without
+Pillow, images that need no resizing still pass through. Audio remains unsupported.
+Render document pages to PNG, as the pdf skill describes, before inspecting them.
 
 Native traces retain image data. API requests place images in a labeled user message
 after all parallel tool results, because Chat Completions tool messages accept text
 only. Compaction receives the actual images; unmeasured images provisionally count as
 8192 tokens each until provider usage is available. This estimate is model-dependent,
-not an exact visual-token budget. The existing explicit `enable_image_tools: true`
-override also works in `train` for `view_image` and MCP; training `read(image)` retains
-its historical disabled-vision response.
+not an exact visual-token budget. An explicit `enable_image_tools: true` also
+enables image reads and MCP images in `train`; without it, training `read(image)` keeps
+its disabled-vision response.

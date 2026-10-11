@@ -49,7 +49,7 @@ If recalculation was not possible, say that cached values were not recalculated.
 
 ### Visual review
 
-When layout matters, view the changed and output sheets in a faithful render. For a new workbook or one that will be printed, look at the reader-facing sheets and the print output: page breaks, repeated print titles, scaling, and print areas.
+When layout matters, view the changed and output sheets in a faithful render. For a new workbook or one that will be printed, look at the reader-facing sheets and the print output: page breaks, repeated print titles, scaling, and print areas. Render sheets as the pdf skill describes.
 
 ### Examples
 

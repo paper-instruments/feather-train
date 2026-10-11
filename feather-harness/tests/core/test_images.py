@@ -35,7 +35,7 @@ async def test_local_image_reaches_real_chat_request_and_trace(tmp_path, compact
     (tmp_path / "page.png").write_bytes(PNG)
     requests = []
     replies = iter([
-        {"role": "assistant", "tool_calls": [{"id": "image-call", "type": "function", "function": {"name": "view_image", "arguments": '{"file_path":"page.png"}'}}]},
+        {"role": "assistant", "tool_calls": [{"id": "image-call", "type": "function", "function": {"name": "read", "arguments": '{"file_path":"page.png"}'}}]},
         *([{"role": "assistant", "content": "Visual findings summarized."}] if compact else []),
         {"role": "assistant", "content": "Finished."},
     ])
@@ -69,11 +69,11 @@ async def test_image_worker_enforces_paths_and_format(tmp_path):
     outside.write_bytes(PNG)
     (tmp_path / "escape.png").symlink_to(outside)
     (tmp_path / "bad.png").write_text("not an image")
-    tool = FileTools(LocalFileRuntime(tmp_path)).view_image_tool()
+    tool = FileTools(LocalFileRuntime(tmp_path), enable_image_reads=True).read_tool()
     assert (await tool.invoke('{"file_path":"escape.png"}')).error == "invalid_path"
     assert (await tool.invoke('{"file_path":"bad.png"}')).error == "tool_error"
-    (tmp_path / "large.png").write_bytes(b"x" * (10 * 1024 * 1024 + 1))
-    assert "10 MiB" in (await tool.invoke('{"file_path":"large.png"}')).content
+    (tmp_path / "large.png").write_bytes(b"x" * (20 * 1024 * 1024 + 1))
+    assert "Maximum input size is 20 MB" in (await tool.invoke('{"file_path":"large.png"}')).content
 
 
 @pytest.mark.parametrize("enabled", [False, True])

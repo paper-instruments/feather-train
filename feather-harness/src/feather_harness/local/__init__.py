@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 
 from ..core.compaction import CompactionConfig
@@ -16,7 +18,7 @@ from ..production import (
     production_tools,
     validate_profile,
 )
-from ..prompt import build_instructions
+from ..prompt import build_instructions, compose_additional_instructions, prompt_metadata
 from ..scripts.install_skills import install_production_skills, install_skills, install_task_skills
 from ..scripts.save_transcript import save_transcript
 from ..subagents import PARENT_GUIDANCE, AgentSession, SubagentConfig, Subagents
@@ -26,6 +28,7 @@ from ..tools.files import FileTools
 from ..tools.mcp import McpServerSpec, run_with_mcp
 from ..tools.process import ProcessTools
 from ..tools.todo import TodoList
+from ..tools.web import WebProvider, web_fetch_tool, web_search_tool
 from .filesystem import LocalFileRuntime
 from .process import LocalShellRuntime
 
@@ -45,6 +48,9 @@ async def run_local(
     profile: Profile = "prod",
     enable_image_tools: bool | None = None,
     subagents: SubagentConfig | None = None,
+    additional_instructions: str | None = None,
+    eval_prompt_output: Path | None = None,
+    web_provider: WebProvider | None = None,
 ) -> RunResult:
     validate_profile(profile)
     if subagents is not None and profile != "prod":
@@ -59,13 +65,19 @@ async def run_local(
         install_production_skills(workspace)
     if skills_dir is not None:
         install_task_skills(workspace, skills_dir)
+    _exclude_harness_paths(workspace)
     if profile == "prod":
         instructions = build_production_instructions(
-            skills_root=workspace / ".agents", enable_image_tools=enable_image_tools
+            skills_root=workspace / ".agents",
+            additional_instructions=additional_instructions,
+            workspace=str(workspace),
         )
         compaction = production_compaction(compaction)
     else:
         instructions = build_instructions(skills_root=workspace / ".agents")
+        instructions = compose_additional_instructions(
+            instructions, additional_instructions, workspace=str(workspace)
+        )
     parent_instructions = instructions
     if subagents is not None:
         parent_instructions += (
@@ -74,6 +86,13 @@ async def run_local(
             f"{subagents.max_agents} children total, and {subagents.max_turns} turns per "
             "child across its lifetime, including follow-ups."
         )
+    if eval_prompt_output is not None:
+        eval_prompt_output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = eval_prompt_output.with_suffix(".tmp")
+        temporary.write_text(json.dumps(
+            prompt_metadata(parent_instructions, profile=profile), indent=2
+        ))
+        temporary.replace(eval_prompt_output)
     request = RunRequest(
         messages=(
             SystemMessage(content=parent_instructions),
@@ -93,6 +112,7 @@ async def run_local(
             mcp_servers=mcp_servers,
             profile=profile,
             enable_image_tools=enable_image_tools,
+            web_provider=web_provider,
         )
 
     async def save_result(agent_id: str, run_number: int, result: RunResult) -> str:
@@ -144,6 +164,7 @@ async def run_local(
         profile=profile,
         enable_image_tools=enable_image_tools,
         agents=agents,
+        web_provider=web_provider,
     )
 
 
@@ -158,9 +179,10 @@ async def _with_local_agent(
     profile: Profile,
     enable_image_tools: bool,
     agents: Subagents | None = None,
+    web_provider: WebProvider | None = None,
 ) -> RunResult:
     file_transport = LocalFileRuntime(workspace)
-    files = FileTools(file_transport, enable_image_reads=profile == "prod" and enable_image_tools)
+    files = FileTools(file_transport, enable_image_reads=enable_image_tools)
     todos = TodoList()
 
     def compaction_state() -> tuple[str, ...]:
@@ -183,11 +205,10 @@ async def _with_local_agent(
             files.glob_tool(),
             todos.tool(),
         )
-
-        if enable_image_tools:
-            builtins = (*builtins, files.view_image_tool())
+        if web_provider is not None:
+            builtins = (*builtins, web_search_tool(web_provider), web_fetch_tool(web_provider))
         if profile == "prod":
-            builtins = production_tools(builtins, enable_image_tools=enable_image_tools)
+            builtins = production_tools(builtins, image_reads=enable_image_tools)
         if agents is not None:
             builtins = (*builtins, *subagent_tools(agents))
 
@@ -209,3 +230,33 @@ async def _with_local_agent(
             enable_image_tools=enable_image_tools,
             file_transport=file_transport,
         )
+
+
+_HARNESS_PATHS = (".agents/", ".feather/")
+
+
+def _exclude_harness_paths(workspace: Path) -> None:
+    """Keep harness-owned files out of `git add -A` so patch-graded tasks see only agent edits."""
+    if shutil.which("git") is None:
+        return
+    # The agent user may not own the checkout; this read-only probe must not trip safe.directory.
+    probe = subprocess.run(
+        ["git", "-c", "safe.directory=*", "rev-parse", "--show-prefix", "--git-path", "info/exclude"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode != 0:
+        return
+    prefix, exclude = probe.stdout.splitlines()
+    exclude_path = workspace / exclude
+    existing = exclude_path.read_text() if exclude_path.exists() else ""
+    entries = [f"/{prefix}{path}" for path in _HARNESS_PATHS]
+    missing = [entry for entry in entries if entry not in existing.splitlines()]
+    if not missing:
+        return
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    separator = "\n" if existing and not existing.endswith("\n") else ""
+    with exclude_path.open("a") as handle:
+        handle.write(separator + "\n".join(missing) + "\n")

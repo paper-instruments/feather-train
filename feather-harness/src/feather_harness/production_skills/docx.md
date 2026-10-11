@@ -31,7 +31,7 @@ In a new document, use built-in heading styles in a logical hierarchy, and simpl
 
 ### Building a net-new document
 
-Professional writing is short. A document answering a bounded question gives its answer at the start, and the rest carries only what a reader needs to act on it. A length the user gives is a hard ceiling. Plan the document to fit that length before drafting, keeping type at the house sizes.
+Professional writing is short. A document answering a bounded question gives its answer at the start, and the rest carries only what a reader needs to act on it. A length the user gives is to be respected. Set a word budget from it before drafting: a page of 12-pt single-spaced body text holds roughly 450 words, fewer once headings, tables, and a memo or title block take their space. Be mindful of word count as you draft, and keep type at the house sizes.
 
 Define named styles for the title, headings, body, and block quotations before writing, set 1-inch margins, and apply all formatting through those styles. One typeface covers every style, including the title, headings, headers, and footers. All text is black. Headings are bold, with at most two levels, and the document has no colored text, shaded boxes, or fills.
 
@@ -55,7 +55,7 @@ Quote supplied text of more than a line as a block indented on both sides, witho
 
 ### Visual review
 
-When pagination or layout matters and rendering is available, view the affected pages for a scoped edit. For a new or globally changed document, review a page overview, then inspect detail where it matters at a readable resolution. If the DOCX and an exported PDF are both deliverables, check both. When the user gave a length, count the rendered pages before finishing, and if the document runs over, cut repetition and nonessential content rather than shrinking type or margins.
+When pagination or layout matters and rendering is available, view the affected pages for a scoped edit. For a new or globally changed document, review a page overview, then inspect detail where it matters at a readable resolution. If the DOCX and an exported PDF are both deliverables, check both. When the user gave a length, count the rendered pages before finishing, and if the document runs over, cut repetition and nonessential content rather than shrinking type or margins. Render pages as the pdf skill describes.
 
 ### Examples
 

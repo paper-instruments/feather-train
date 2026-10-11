@@ -18,7 +18,7 @@ from charset_normalizer import from_bytes
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 MAX_OUTPUT_CHARS = 24000
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 DOCUMENT_EXTENSIONS = {
     ".doc",
     ".docm",
@@ -204,10 +204,11 @@ def _validate_path(
 ) -> tuple[Path, Path, str, os.stat_result | None]:
     """Return the requested path, its resolved target, display text, and metadata."""
     output_directory = _output_directory(root)
-    if not output_directory.is_symlink():
+    if not output_directory.is_symlink() and output_directory.resolve() == output_directory:
         read_grants = (*read_grants, str(output_directory))
     grants = [*read_grants, *write_grants]
-    # Drive-letter paths are native on Windows and remain confined to the grants.
+    # Drive-letter paths are native on Windows (and still confined below);
+    # elsewhere they would silently join under the workspace root.
     if os.name != "nt" and re.match(r"^[A-Za-z]:[/\\]", raw):
         invalid_path(raw, parameter)
     if os.name == "nt":
@@ -333,28 +334,34 @@ def save_output_preview(
     content: str, tool_name: str = "read", *, workspace: str | Path
 ) -> tuple[str, str, str, str | None]:
     """Return preview boundaries and the path only after the complete output is saved."""
-    if (
-        len(content) <= MAX_OUTPUT_CHARS
-        or os.name == "nt"
-        or not _supports_safe_relative_write()
-    ):
+    if len(content) <= MAX_OUTPUT_CHARS:
         return content, "", "", None
     saved_path = None
     try:
         directory = _output_directory(workspace)
         directory.mkdir(mode=0o700, exist_ok=True)
-        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            os.fchmod(directory_fd, 0o700)
-            filename = f"{tool_name}_{uuid.uuid4().hex[:8]}.txt"
-            descriptor = os.open(
-                filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory_fd
-            )
+        if _supports_safe_relative_write():
+            directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fchmod(directory_fd, 0o700)
+                filename = f"{tool_name}_{uuid.uuid4().hex[:8]}.txt"
+                descriptor = os.open(
+                    filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory_fd
+                )
+                with os.fdopen(descriptor, "wb") as output:
+                    output.write(content.encode("utf-8"))
+                saved_path = str(directory / filename)
+            finally:
+                os.close(directory_fd)
+        else:
+            # Windows lacks directory-relative opens; reject redirected output roots.
+            if directory.is_symlink() or directory.resolve() != directory:
+                raise OSError("tool-output directory must not be redirected")
+            path = directory / f"{tool_name}_{uuid.uuid4().hex[:8]}.txt"
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(descriptor, "wb") as output:
                 output.write(content.encode("utf-8"))
-            saved_path = str(directory / filename)
-        finally:
-            os.close(directory_fd)
+            saved_path = str(path)
     except OSError:
         pass  # Output persistence is best effort, as in the pinned tool.
 
@@ -386,7 +393,9 @@ def truncate_output_parts(
     return content[:head], "\n\n..." + notice(head, tail) + "...\n\n", content[-tail:]
 
 
-def load_text(path: Path, display: str, metadata: os.stat_result) -> tuple[str, str, str]:
+def load_text(
+    path: Path, display: str, metadata: os.stat_result, *, scope: str = "reads text files"
+) -> tuple[str, str, str]:
     if metadata.st_size > MAX_FILE_SIZE_BYTES:
         raise FileToolError(
             f"File validation failed for {display}: File is too large ({metadata.st_size / 1024 / 1024:.1f}MB). Maximum allowed size is 10MB."
@@ -395,7 +404,7 @@ def load_text(path: Path, display: str, metadata: os.stat_result) -> tuple[str, 
     data = path.read_bytes()
     if _is_binary(data[:1024]):
         raise FileToolError(
-            f"File validation failed for {display}: This tool reads text files only; the file appears to be binary."
+            f"File validation failed for {display}: This tool {scope} only; the file appears to be binary."
         )
     # Short UTF-8 text is easy to misidentify. Guess only if strict decoding fails.
     encoding = "utf-8-sig" if data.startswith(b"\xef\xbb\xbf") else "utf-8"

@@ -1,4 +1,4 @@
-"""Exercise image worker output through the actual host result protocol."""
+"""Exercise image reads through the actual host result protocol."""
 
 import base64
 import json
@@ -13,8 +13,9 @@ from feather_harness.local.filesystem import SCRIPTS
 from feather_train.sandbox import remote
 
 
-@pytest.mark.parametrize("image_bytes", [1_100_000, 10 * 1024 * 1024])
-async def test_image_worker_result_survives_host_publication_and_recovery(
+# The largest image read passes through unchanged just under 3.75 MB, about 5 MB of base64.
+@pytest.mark.parametrize("image_bytes", [1_100_000, 3_700_000])
+async def test_image_read_result_survives_host_publication_and_recovery(
     tmp_path, monkeypatch, capsys, image_bytes
 ):
     image = _png(image_bytes)
@@ -22,8 +23,8 @@ async def test_image_worker_result_survives_host_publication_and_recovery(
     monkeypatch.setenv("PYTHONPATH", str(SCRIPTS))
     path = tmp_path / "call.json"
     request = {
-        "name": "view_image",
-        "arguments": {"file_path": "page.png"},
+        "name": "read",
+        "arguments": {"file_path": "page.png", "offset": 1, "limit": 2000, "image_reads": True},
         "config": {
             "workspace": str(tmp_path),
             "read_grants": [],

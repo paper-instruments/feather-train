@@ -7,7 +7,14 @@ from .core.messages import (
     UserMessage,
     transcript_jsonl,
 )
-from .core.model import ChatCompletionsModel, ModelSettings
+from .core.model import (
+    ChatCompletionsModel,
+    ModelSettings,
+    ProviderUsage,
+    RetryPolicy,
+    UsageTotals,
+    summarize_usage,
+)
 from .core.runner import AgentRunError, FeatherAgent, RunRequest, RunResult, TraceSegment
 from .local import run_local
 from .local.filesystem import LocalFileRuntime
@@ -32,12 +39,16 @@ __all__ = [
     "LocalFileRuntime",
     "LocalShellRuntime",
     "ProcessTools",
+    "ProviderUsage",
     "ModelSettings",
+    "RetryPolicy",
     "McpServerSpec",
     "run_with_mcp",
     "RunRequest",
     "RunResult",
     "TraceSegment",
+    "UsageTotals",
+    "summarize_usage",
     "SystemMessage",
     "SubagentConfig",
     "Subagents",

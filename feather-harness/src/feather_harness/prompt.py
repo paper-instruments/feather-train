@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 RESOURCE_ROOT = Path(__file__).parent
@@ -46,3 +47,23 @@ def build_instructions(
     # The disabled SDK filesystem preamble still contributed this final separator.
     fragments.append("")
     return "\n\n".join(fragments)
+
+
+def compose_additional_instructions(
+    instructions: str, additional_instructions: str | None, *, workspace: str,
+    task_instructions: str | None = None,
+) -> str:
+    additional = [task_instructions] if task_instructions else []
+    if additional_instructions:
+        additional.append(additional_instructions.replace("{{ workspace }}", workspace))
+    if not additional:
+        return instructions
+    prompt = "\n\n".join(additional)
+    return f"{instructions.rstrip()}\n\n# Additional task instructions\n\n{prompt}"
+
+
+def prompt_metadata(instructions: str, *, profile: str) -> dict:
+    return {
+        "profile": profile,
+        "system_prompt_sha256": hashlib.sha256(instructions.encode()).hexdigest(),
+    }

@@ -26,7 +26,7 @@ def write(payload):
     validate_write_extension(Path(display), display)
     if target.metadata is not None:
         expected = require_current_read(args["revisions"], display)
-        _, encoding, actual = load_text(target.path, display, target.metadata)
+        _, encoding, actual = load_text(target.path, display, target.metadata, scope="writes text files")
         check_revision(display, expected, actual)
     else:
         encoding = "utf-8"

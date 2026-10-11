@@ -13,8 +13,8 @@ corrective continuation is `prod`'s single recovery from a cut-off or empty resp
 | Built-in tool descriptions | Original descriptions and schemas | Usage guidance for eight built-ins |
 | Image tools, when no override is supplied | Disabled | Enabled |
 | Compaction prompt, when none is supplied | Original prompt | Structured continuation prompt |
-| Cut-off or empty model responses | Original handling | One recovery per run; interrupted tool calls and summaries fail |
-| Compaction mechanics and execution | Shared, unchanged | Shared, unchanged |
+| Cut-off or empty model responses | Original handling | One recovery per run; interrupted tool calls fail, incomplete summaries retry |
+| Compaction mechanics and execution | Shared loop and retry budget | Shared loop and retry budget |
 
 ## Selecting the bundle
 
@@ -36,8 +36,8 @@ JSON also supports `profile` and `enable_image_tools`:
 
 The example disables image tools for a text-only endpoint. An omitted or null
 `enable_image_tools` follows the profile; an explicit boolean wins. No model-name
-heuristic establishes image support. `train` with an explicit image override keeps
-the pre-existing `view_image`/MCP behavior; it does not change `read(image)`.
+heuristic establishes image support. `train` with an explicit image override
+enables image reads and MCP images, as in `prod`.
 
 ## Production skills
 
@@ -74,12 +74,11 @@ the rest of its environment.
 Native Feather Train E2B evals accept `profile: prod` in `env_args`; their
 training-compatible default remains `train`. The E2B runtime archive carries the
 same production guidance, installs it in the task workspace before rollout, and
-uses the production prompt and tool behavior on the coordinator. The E2B prompt
-describes sandboxed shell execution rather than local host permissions.
+uses the production prompt and tool behavior on the coordinator. Optional host capability statements describe differences in the execution environment.
 
-Production changes description text only; tool argument types, defaults, and
-validation remain unchanged. The sole parameter-help override explains that
-production `read` also accepts images.
+Production changes tool descriptions without changing invocation contracts. `read`
+uses distinct descriptions and parameter help for text-only and image-enabled runs;
+image input is handled by `read` rather than a separate `view_image` tool.
 
 ## What the prose is intended to change
 
@@ -110,13 +109,29 @@ tool calls stops the run without executing any of them, and a filtered response 
 feedback. Otherwise the run appends one fixed feedback message and continues, once per run
 across all compactions; a second failure stops with `ModelBehaviorError`, and no feedback is
 added when no turn remains. Refusals keep their existing handling. A compaction response that
-was cut off, filtered, or refused fails before it can replace the context. `RunResult.recoveries`
+is empty retries up to four attempts; with response validation enabled, summaries cut off
+by `length` or `error` also retry. Filtering and refusal fail immediately. Every failed
+attempt remains in the trace and cannot replace the execution context. `RunResult.recoveries`
 and the Harbor metadata record whether a recovery happened.
+
+## Task-runner guidance
+
+Production prose follows the Train PR 636 stack's task-runner adaptation. It omits
+instructions that assume a live interaction channel, including clarification questions,
+live status updates, and approval workflows. The default system prompt has no host
+capability section. Hosts may explicitly supply `host_facts` and `vision_fact` (or
+`enable_image_tools` to select the standard image sentence) when their capabilities
+need to be described. Host-owned skill paths and opt-in subagent guidance remain supported.
+
+Both profiles append `additional_instructions` in one final system section, expanding
+`{{ workspace }}` only in that generic guidance. The task request itself stays literal.
+`eval_prompt_output` saves the selected profile and effective parent prompt hash before
+model execution, including subagent guidance when enabled.
 
 ## Compatibility boundary
 
 `build_instructions()`, bare `FileTools`, the technical manuals, tool schemas, model
-serialization, and the core runner retain their historical defaults. Native training
+serialization, and the core runner keep their minimal training defaults. Native training
 currently assembles those lower-level components directly; this change does not migrate
 its prompt. In-repository editable workspace dependencies use the checked-out source:
 unchanged version numbers do not isolate new builds from these changes. A caller upgrading `run_local` or the CLI
@@ -127,7 +142,13 @@ Harbor explicitly defaults to `prod`, with images still disabled unless requeste
 It accepts `train` for reproduction and records profile, effective image setting, and
 installed wheel SHA-256 in `harness-condition.json` and agent context metadata. Existing deployed immutable wheels are not changed by a source merge.
 
-Compaction keeps its existing trigger, original task, recent history, todo handling,
-and 65,536-token summary maximum. No approval/UI framework, sandbox provisioning,
+Compaction retains the original task, recent history, and todo handling. Optional
+`trigger_tokens` selects an explicit compaction threshold, and
+`exclude_unreplayed_reasoning` subtracts reasoning that the model will not see again
+from the context estimate.
+Its `max_tokens` summary ceiling defaults to 65,536 and can be configured independently
+of the agent ceiling. Summaries inherit the agent's other sampling and provider settings;
+a configured GLM token budget clamps output to remaining context room.
+No approval/UI framework, sandbox provisioning,
 external vision reviewer, application event framework, or tool-mutation retry is added.
 Local commands retain the host's permissions; a profile is not a security boundary.

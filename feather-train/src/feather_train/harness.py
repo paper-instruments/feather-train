@@ -78,8 +78,7 @@ class FeatherHarnessConfig(vf.HarnessConfig):
         return self
 
     def tools_for_task(self, *, requires_web_search: bool) -> tuple[str, ...]:
-        excluded = WEB_TOOL_NAMES if self.enable_image_tools else (*WEB_TOOL_NAMES, "view_image")
-        tools = tuple(name for name in self.tools if name not in excluded)
+        tools = tuple(name for name in self.tools if name not in WEB_TOOL_NAMES)
         return (*tools, *WEB_TOOL_NAMES) if requires_web_search else tools
 
 

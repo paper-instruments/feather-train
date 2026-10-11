@@ -109,3 +109,8 @@ A host that does this should:
 
 This package does not implement desktop UI, approval dialogs, credential storage,
 cross-process resume, peer messaging, nested teams, or automatic conflict resolution.
+
+Children inherit the run's additional system guidance and optional web provider. The
+parent and children keep separate file revision state and transcripts, while sharing
+the configured provider. Prompt metadata records the parent's effective system prompt,
+including delegation guidance and limits.

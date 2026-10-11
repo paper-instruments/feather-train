@@ -1,4 +1,4 @@
-"""Read a text file. Input and output are JSON on stdin/stdout."""
+"""Read a text file, or an image when image reads are enabled. JSON on stdin/stdout."""
 
 import re
 
@@ -10,7 +10,21 @@ from _files import (
     main,
     require_file,
 )
-from view_image_tool import view_image
+from _images import load_image
+
+DOCUMENT_SKILLS = {
+    ".doc": "docx",
+    ".docm": "docx",
+    ".docx": "docx",
+    ".pdf": "pdf",
+    ".ppt": "pptx",
+    ".pptm": "pptx",
+    ".pptx": "pptx",
+    ".xls": "xlsx",
+    ".xlsb": "xlsx",
+    ".xlsm": "xlsx",
+    ".xlsx": "xlsx",
+}
 
 
 def read(payload):
@@ -22,15 +36,21 @@ def read(payload):
         write_grants=payload["write_grants"],
     )
     extension = path.suffix.lower()
+    image_reads = args.get("image_reads", False)
     if extension in IMAGE_EXTENSIONS:
-        if args.get("enable_image_tools", False):
-            return view_image(payload)
+        if image_reads:
+            return {"content": load_image(path, display, metadata)}
         return {"content": "Vision is not available in this environment."}
     if extension in DOCUMENT_EXTENSIONS:
+        if image_reads:
+            raise FileToolError(
+                f"File validation failed for {display}: This tool reads text and image files only; the requested path has a binary document format. Read its contents through the {DOCUMENT_SKILLS[extension]} skill."
+            )
         raise FileToolError(
             f"File validation failed for {display}: This tool reads text files only; the requested path has a binary document format."
         )
-    text, encoding, revision = load_text(path, display, metadata)
+    scope = "reads text and image files" if image_reads else "reads text files"
+    text, encoding, revision = load_text(path, display, metadata, scope=scope)
     lines = re.split(r"\r\n|\r|\n", text)
     if lines[-1] == "":
         lines.pop()

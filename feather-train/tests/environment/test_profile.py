@@ -8,7 +8,6 @@ import verifiers.v1 as vf
 from feather_harness import ChatCompletionsModel
 from feather_harness.core.compaction import CompactionConfig
 from feather_harness.production import (
-    IMAGE_READ_GUIDANCE,
     PRODUCTION_COMPACTION_PROMPT,
     PRODUCTION_PROMPT,
     PRODUCTION_TOOL_DESCRIPTIONS,
@@ -16,7 +15,7 @@ from feather_harness.production import (
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
-from feather_train.agent import E2B_HOST_FACTS, run_e2b
+from feather_train.agent import run_e2b
 from feather_train.harness import (
     FeatherHarnessConfig,
     _agent_system_instructions,
@@ -36,7 +35,10 @@ class StubTransport:
 
 
 @pytest.mark.parametrize("profile", ["train", "prod"])
-async def test_e2b_profile_selects_model_visible_prompt_and_tool_descriptions(profile):
+@pytest.mark.parametrize("enable_image_tools", [False, True])
+async def test_e2b_profile_selects_model_visible_prompt_and_tool_descriptions(
+    profile, enable_image_tools
+):
     requests = []
 
     def respond(request):
@@ -65,6 +67,7 @@ async def test_e2b_profile_selects_model_visible_prompt_and_tool_descriptions(pr
             "Do the task",
             instructions="Keep the supplied workbook format.",
             profile=profile,
+            enable_image_tools=enable_image_tools,
             model=ChatCompletionsModel(client=client, model="test"),
             transport=StubTransport(),
             tools=("read",),
@@ -77,18 +80,17 @@ async def test_e2b_profile_selects_model_visible_prompt_and_tool_descriptions(pr
     read = requests[0]["tools"][0]["function"]
     if profile == "prod":
         assert PRODUCTION_PROMPT in system
-        assert E2B_HOST_FACTS in system
+        assert "headless" not in system
         assert "Shell commands run locally with the host's permissions" not in system
         assert "Keep the supplied workbook format." in system
         assert "Tool capability instructions" in system
-        assert read["description"] == PRODUCTION_TOOL_DESCRIPTIONS["read"].replace(
-            IMAGE_READ_GUIDANCE, ""
-        )
-        assert "supported image paths" not in read["description"].lower()
+        description_key = "read" if enable_image_tools else "read_without_images"
+        assert read["description"] == PRODUCTION_TOOL_DESCRIPTIONS[description_key]
     else:
         assert PRODUCTION_PROMPT not in system
         assert system.startswith("# Agent instructions\n\nKeep the supplied workbook format.")
         assert "Tool capability instructions" not in system
+    assert ("image" in read["description"].lower()) is enable_image_tools
 
 
 async def test_e2b_prod_recovers_one_cut_off_response():

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
+from dataclasses import replace
 from typing import Protocol
 
 from pydantic import Field, JsonValue, ValidationError
@@ -16,6 +18,18 @@ logger = logging.getLogger(__name__)
 READ_DESCRIPTION = (
     "Read a text file with line numbers. `offset` and `limit` bound the returned range. A "
     "successful read records the file revision required to edit or overwrite its current contents."
+)
+READ_IMAGE_DESCRIPTION = (
+    "Read a text file or an image. Text is returned with line numbers, `offset` and `limit` bound "
+    "the returned range, and a successful text read records the file revision required to edit or "
+    "overwrite its current contents. PNG, JPEG, GIF, and WebP images are returned for visual "
+    "inspection, downscaled to at most 2000 pixels on the longest side. To inspect a PDF or Office "
+    "file visually, render the needed pages to PNG at a legible resolution and read only those, "
+    "since each image adds substantial context."
+)
+READ_IMAGE_PATH_HELP = (
+    "Path to a text file or image inside the workspace. Relative paths resolve from the workspace "
+    "root; absolute in-workspace or explicitly granted paths are also accepted."
 )
 
 
@@ -55,10 +69,6 @@ class ReadArgs(FrozenModel):
         le=2_000,
         description="Maximum number of lines to return.",
     )
-
-
-class ViewImageArgs(FrozenModel):
-    file_path: str = Field(min_length=1, description="Path to a PNG, JPEG, GIF or WebP image inside the workspace.")
 
 
 class EditArgs(FrozenModel):
@@ -176,10 +186,12 @@ class FileTools:
         self.revisions: dict[str, str] = {}
 
     def read_tool(self) -> Tool:
-        return self._tool("read", READ_DESCRIPTION, ReadArgs)
-
-    def view_image_tool(self) -> Tool:
-        return self._tool("view_image", "Inspect an image visually. Render PDF or Office pages to PNG with the document skills first, then call this tool on the rendered file. Accepts PNG, JPEG, GIF or WebP up to 10 MiB.", ViewImageArgs)
+        if not self.enable_image_reads:
+            return self._tool("read", READ_DESCRIPTION, ReadArgs)
+        tool = self._tool("read", READ_IMAGE_DESCRIPTION, ReadArgs)
+        parameters = deepcopy(tool.spec.parameters)
+        parameters["properties"]["file_path"]["description"] = READ_IMAGE_PATH_HELP
+        return replace(tool, spec=tool.spec.model_copy(update={"parameters": parameters}))
 
     def edit_tool(self) -> Tool:
         return self._tool("edit", EDIT_DESCRIPTION, EditArgs)
@@ -206,7 +218,7 @@ class FileTools:
                 )
             arguments = args.model_dump(mode="json")
             if name == "read" and self.enable_image_reads:
-                arguments["enable_image_tools"] = True
+                arguments["image_reads"] = True
             if name in {"edit", "write"}:
                 arguments["revisions"] = self.revisions
             result = await self.transport.run(name, arguments)

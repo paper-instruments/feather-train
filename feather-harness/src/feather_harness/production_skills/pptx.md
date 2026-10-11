@@ -58,7 +58,7 @@ Avoid a universal title/subtitle/three-cards layout. One dominant visual or anal
 
 ### Visual review
 
-For a new or restyled deck, an overview of all slides shows rhythm, blank slides, inconsistent margins, and unexpected shifts. Then read the slides that matter at a resolution where body text and sources are legible, which is about 150 dpi for a standard 16:9 slide. A 70 dpi overview cannot show shadows, stray glyphs, or a few points of misalignment. At the higher resolution, look for elements that touch or overlap, text that runs past its zone, and gaps that differ for the same relationship. For a scoped edit, view the changed slides and any slide whose layout the edit could affect. Without image input, do not describe rendering as visual verification, and say that visual review was not possible.
+For a new or restyled deck, an overview of all slides shows rhythm, blank slides, inconsistent margins, and unexpected shifts. Then read the slides that matter at a resolution where body text and sources are legible, which is about 150 dpi for a standard 16:9 slide. A 70 dpi overview cannot show shadows, stray glyphs, or a few points of misalignment. At the higher resolution, look for elements that touch or overlap, text that runs past its zone, and gaps that differ for the same relationship. For a scoped edit, view the changed slides and any slide whose layout the edit could affect. Without image input, do not describe rendering as visual verification, and say that visual review was not possible. Render slides as the pdf skill describes.
 
 ### Examples
 

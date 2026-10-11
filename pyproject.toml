@@ -1,5 +1,17 @@
+[project]
+name = "feather-workspace"
+version = "0.0.0"
+requires-python = ">=3.12"
+
 [tool.uv.workspace]
 members = ["feather-harness", "feather-train", "feather-eval"]
 
 [tool.uv.sources]
 feather-harness = { workspace = true }
+
+[tool.uv]
+package = false
+conflicts = [
+    # The GLM image processor and training cookbook require different Transformers versions.
+    [{package = "feather-harness", extra = "token-count"}, {package = "feather-train", extra = "training"}],
+]

@@ -51,9 +51,9 @@ profile instead.
 
 For a vision-capable endpoint, pass `--ak enable_image_tools=true` (or set
 `kwargs.enable_image_tools: true` in the Harbor agent config). This enables native
-`view_image` for PNG/JPEG/GIF/WebP files and image results from MCP tools; production
-also supports images through `read`. Render
-document pages to images using the task's document tools before inspecting them.
+image reads through `read` for PNG/JPEG/GIF/WebP files in both profiles, plus image
+results from MCP tools. Render document pages to images using the task's document
+tools before inspecting them.
 Images are retained in native traces and ATIF; the default remains text-only.
 
 ## Task environment

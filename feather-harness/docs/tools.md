@@ -8,25 +8,15 @@ configured MCP tools; web tools are available to library callers.
 
 | Tool | Arguments | Behavior |
 | --- | --- | --- |
-| `read` | `file_path`; `offset=1`; `limit=2000` | Read text with line numbers, starting at a one-based offset. Limit: 1–2000 lines. |
+| `read` | `file_path`; `offset=1`; `limit=2000` | Read text with line numbers, starting at a one-based offset. Limit: 1–2000 lines. With images enabled, also returns images. |
 | `write` | `file_path`; `content` | Create a text file or replace its full contents, creating parent directories as needed. |
 | `edit` | `file_path`; `old_string`; `new_string`; `replace_all=false` | Replace matching text in an existing file. An empty `new_string` deletes it. |
 | `grep` | `pattern`; `path="."`; optional `include`; `limit=100` | Search with a ripgrep-compatible regex; return paths and line numbers. `include` filters filenames in directory searches. |
 | `glob` | `pattern`; `path="."`; `limit=100` | Find files by glob pattern and return sorted paths. |
-| `view_image` | `file_path` | When enabled, inspect a PNG/JPEG/GIF/WebP image up to 10 MiB. |
 
 Paths are relative to the workspace root. Absolute paths are accepted within the
 workspace or explicitly configured grants. File tools check resolved symlink
 targets too; read-only grants allow inspection but not writes.
-
-On Windows, file tools accept native drive-letter paths and Git Bash paths such
-as `/c/Users/me/project` when they stay within the workspace or explicit grants.
-Grants cannot cover a filesystem root, including a Windows drive root.
-
-On POSIX systems with descriptor-relative file APIs, text writes refuse symlink
-components and keep directory handles open during the write. On Windows and
-other fallback platforms, writes recheck resolved boundaries before mutation;
-they cannot rule out a concurrent junction or symlink swap.
 
 The worker saves large responses in a private, per-workspace temporary directory.
 File tools automatically receive a read-only grant to that directory, not other
@@ -34,17 +24,15 @@ workspaces' saved output or the rest of the temporary directory. Reusing a works
 reuses its output directory. This is not isolation from Bash or other processes with
 the same OS permissions; host isolation and retention remain caller concerns.
 
-On Windows and platforms without secure descriptor-relative file APIs, responses
-remain complete in memory instead of being shortened into saved-file previews.
-
 Search excludes hidden and ignored files and bounds its output. `grep` and `glob`
 accept limits from 1 to 1000. Reading and editing are for text files; edits preserve
 encoding and line endings outside the replacement. New files use UTF-8.
 
-In the default production profile, `read` also returns supported images through the
-same loader as `view_image`. Image reads ignore text line ranges and do not establish
-an editable text revision. Explicit training keeps the disabled-image response from
-`read`. See [profiles](profiles.md) for the image capability override.
+When images are enabled, `read` also returns PNG/JPEG/GIF/WebP images (and converts
+BMP/TIFF), downscaled to at most 2000 px on the longest side and 5 MB of base64. Image
+reads ignore text line ranges and do not establish an editable text revision. With
+images disabled, `read` returns a disabled-vision response for images. See
+[profiles](profiles.md) for the image capability override.
 
 ### Read before modifying
 
@@ -161,8 +149,9 @@ Configuration: [MCP integration](../src/feather_harness/tools/mcp.py).
 `web_search` takes a `query` and returns up to five sources. `web_fetch` takes a
 `url` and returns bounded page text. Both restrict access to public URLs.
 
-Library callers can supply a provider such as `ExaWebProvider`; the local CLI does
-not currently configure one.
+Library callers can supply a provider such as `ExaWebProvider`. The local CLI adds
+both tools only when its config sets `enable_web_tools: true`, and then requires
+`EXA_API_KEY` in the environment before the run starts.
 
 Schemas: [search](../src/feather_harness/tools/web/search.py),
 [fetch](../src/feather_harness/tools/web/fetch.py).

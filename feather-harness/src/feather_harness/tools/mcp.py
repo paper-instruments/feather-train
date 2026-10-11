@@ -43,6 +43,10 @@ class McpServerSpec(FrozenModel):
     args: tuple[str, ...] = ()
     headers: dict[str, str] = Field(default_factory=dict, repr=False)
     raise_on_error_result: bool = False
+    request_timeout_seconds: float = Field(
+        default=60.0, ge=0, strict=True, allow_inf_nan=False,
+        description="MCP response/read timeout in seconds; 0 disables the deadline.",
+    )
 
     @model_validator(mode="after")
     def validate_transport_fields(self) -> McpServerSpec:
@@ -120,6 +124,10 @@ async def _run_and_close(servers, run, reserved_names, closing, enable_image_too
 async def _connect_tools(stack, servers, reserved_names, enable_image_tools=False, file_transport=None) -> tuple[Tool, ...]:
     discovered = []
     for server in servers:
+        response_timeout = server.request_timeout_seconds or None
+        transport_read_timeout = (
+            max(300, response_timeout) if response_timeout is not None else None
+        )
         async with asyncio.timeout(60):
             if server.transport == "stdio":
                 if server.command is None:
@@ -128,19 +136,27 @@ async def _connect_tools(stack, servers, reserved_names, enable_image_tools=Fals
                     StdioServerParameters(command=server.command, args=list(server.args))
                 )
             elif server.transport == "sse":
-                streams = sse_client(_http_url(server), headers=server.headers, timeout=60)
+                streams = sse_client(
+                    _http_url(server), headers=server.headers, timeout=60,
+                    sse_read_timeout=transport_read_timeout,
+                )
             else:
                 client = await stack.enter_async_context(
                     httpx.AsyncClient(
                         headers=server.headers,
-                        timeout=httpx.Timeout(60, read=300),
+                        timeout=httpx.Timeout(60, read=transport_read_timeout),
                         follow_redirects=True,
                     )
                 )
                 streams = streamable_http_client(_http_url(server), http_client=client)
             read, write, *_ = await stack.enter_async_context(streams)
             session = await stack.enter_async_context(
-                ClientSession(read, write, read_timeout_seconds=timedelta(seconds=60))
+                ClientSession(
+                    read, write,
+                    read_timeout_seconds=(
+                        timedelta(seconds=response_timeout) if response_timeout is not None else None
+                    ),
+                )
             )
             await session.initialize()
         for attempt in range(3):
