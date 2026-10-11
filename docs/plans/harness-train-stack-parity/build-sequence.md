@@ -21,7 +21,7 @@ phases:
 - [x] Run package tests, lint, builds and clean installation.
 - [x] Independent review and manual `/simplify` equivalent.
 - [x] Update docs/provenance.
-- [ ] Create the draft PR.
+- [x] Create [draft PR 11](https://github.com/paper-instruments/feather-train/pull/11).
 
 Retain destination-only supported features. Do not copy private Train code or
 change benchmark/training behavior outside the reusable package boundary.
