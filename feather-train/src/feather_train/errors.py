@@ -1,5 +1,6 @@
 """Failures that retrying a rollout cannot repair."""
 
+from feather_harness.core.token_budget import PromptTokenBudgetError
 from feather_harness.tools.web.exa import ExaConfigurationError
 from verifiers.v1 import HarnessError
 
@@ -17,6 +18,7 @@ class NonRetryableHarnessError(HarnessError):
 
 NON_RETRYABLE_CAUSES = (
     NonRetryableHarnessError,
+    PromptTokenBudgetError,
     ExaConfigurationError,
     *PERMANENT_E2B_ERRORS,
 )

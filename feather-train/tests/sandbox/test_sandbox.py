@@ -135,7 +135,7 @@ async def test_native_creation_is_destroyed_when_resume_fails(monkeypatch):
 
     # Substitute the external provider boundary, not any lifecycle internals.
     monkeypatch.setattr(AsyncSandbox, "create", create)
-    task = SimpleNamespace(e2b_snapshot_id="baked-world", network_mode="no-network", mcp_servers=[])
+    task = SimpleNamespace(e2b_snapshot_id="baked-world", network_mode="no-network", mcp_servers=[], environment_mode=None)
     from verifiers.v1 import SandboxError
 
     with pytest.raises(SandboxError, match="resume failed"):
@@ -169,7 +169,7 @@ async def test_native_creation_is_destroyed_on_cancellation(monkeypatch):
         return SimpleNamespace(commands=Commands(), kill=kill)
 
     monkeypatch.setattr(AsyncSandbox, "create", create)
-    task = SimpleNamespace(e2b_snapshot_id="baked-world", network_mode="public", mcp_servers=[])
+    task = SimpleNamespace(e2b_snapshot_id="baked-world", network_mode="public", mcp_servers=[], environment_mode=None)
 
     async def start():
         async with ComposeSandbox.start(task, max_attempts=1):
@@ -197,7 +197,7 @@ async def test_failed_teardown_does_not_replace_resume_failure(monkeypatch, capl
         return SimpleNamespace(commands=Commands(), kill=kill, sandbox_id="test-sandbox")
 
     monkeypatch.setattr(AsyncSandbox, "create", create)
-    task = SimpleNamespace(e2b_snapshot_id="baked-world", network_mode="public", mcp_servers=[])
+    task = SimpleNamespace(e2b_snapshot_id="baked-world", network_mode="public", mcp_servers=[], environment_mode=None)
     with pytest.raises(vf.SandboxError, match="original resume failure"):
         async with ComposeSandbox.start(task, max_attempts=1):
             pytest.fail("broken resume must not reach agent execution")
@@ -241,6 +241,7 @@ async def test_startup_cleans_failed_sandbox_and_does_not_retry_rollout(monkeypa
         e2b_snapshot_id="baked-world",
         network_mode="public",
         mcp_servers=[],
+        environment_mode=None,
         task_artifacts=SimpleNamespace(inputs=False),
     )
     with pytest.raises(RuntimeError, match="agent failed"):

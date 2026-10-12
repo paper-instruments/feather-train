@@ -35,10 +35,7 @@ class StubTransport:
 
 
 @pytest.mark.parametrize("profile", ["train", "prod"])
-@pytest.mark.parametrize("enable_image_tools", [False, True])
-async def test_e2b_profile_selects_model_visible_prompt_and_tool_descriptions(
-    profile, enable_image_tools
-):
+async def test_e2b_profile_selects_model_visible_prompt_and_tool_descriptions(profile):
     requests = []
 
     def respond(request):
@@ -67,7 +64,6 @@ async def test_e2b_profile_selects_model_visible_prompt_and_tool_descriptions(
             "Do the task",
             instructions="Keep the supplied workbook format.",
             profile=profile,
-            enable_image_tools=enable_image_tools,
             model=ChatCompletionsModel(client=client, model="test"),
             transport=StubTransport(),
             tools=("read",),
@@ -84,13 +80,12 @@ async def test_e2b_profile_selects_model_visible_prompt_and_tool_descriptions(
         assert "Shell commands run locally with the host's permissions" not in system
         assert "Keep the supplied workbook format." in system
         assert "Tool capability instructions" in system
-        description_key = "read" if enable_image_tools else "read_without_images"
-        assert read["description"] == PRODUCTION_TOOL_DESCRIPTIONS[description_key]
+        assert read["description"] == PRODUCTION_TOOL_DESCRIPTIONS["read_without_images"]
+        assert "image" not in read["description"].lower()
     else:
         assert PRODUCTION_PROMPT not in system
         assert system.startswith("# Agent instructions\n\nKeep the supplied workbook format.")
         assert "Tool capability instructions" not in system
-    assert ("image" in read["description"].lower()) is enable_image_tools
 
 
 async def test_e2b_prod_recovers_one_cut_off_response():

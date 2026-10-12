@@ -11,9 +11,24 @@ from pydantic import ValidationError
 pytest.importorskip("verifiers.v1")
 
 from feather_train.tasks import taskset
-from feather_train.tasks.taskset import FeatherTaskset, FeatherTasksetConfig
+from feather_train.tasks.taskset import FeatherTaskData, FeatherTaskset, FeatherTasksetConfig
 
 REVISION = "a" * 40
+
+
+@pytest.mark.parametrize("mode", ["shared", "separate"])
+def test_factory_task_boundary_rejects_official_verifier_modes(mode):
+    data = dict(
+        idx=0, task_id="task", task_name="task", world_id="world", source="factory",
+        requires_web_search=False, network_mode="public", environment_mode=mode,
+        hf_dataset="test/tasks", hf_revision=REVISION, mcp_servers=[], prompt="solve",
+    )
+    with pytest.raises(ValidationError, match="Factory task task in world world.*peer verifier"):
+        FeatherTaskData(**data)
+    benchmark = FeatherTaskData(**{**data, "source": "benchmark"})
+    assert benchmark.environment_mode == mode
+    factory = FeatherTaskData(**{**data, "environment_mode": None})
+    assert factory.environment_mode is None
 
 
 @pytest.mark.parametrize("dataset", [{}, {"hf_dataset": ""}, {"hf_dataset": "   "}])
@@ -99,6 +114,111 @@ def test_preserves_instructions_and_loads_shared_world_once(exported_dataset):
         assert task.data.dataset_env_oid == "trusted-stamp"
         assert not task.data.task_artifacts.inputs
     assert Counter(requests) == Counter(files.keys())
+
+
+@pytest.mark.parametrize("mode", ["shared", "separate"])
+def test_factory_world_cannot_override_peer_verifier_in_task_loading(exported_dataset, mode):
+    _, files, _ = exported_dataset
+    files["worlds/world/task.harbor.template.toml"] = (
+        ('artifacts=["/logs/artifacts/answer.txt"]\n' if mode == "separate" else "")
+        + '[environment]\nnetwork_mode="no-network"\nworkdir="/app"\n'
+        + f'[verifier]\nenvironment_mode="{mode}"\n'
+    )
+    with pytest.raises(ValueError, match="test/tasks: Factory task one in world world.*peer verifier"):
+        load()
+
+
+@pytest.mark.parametrize("explicit_workdir", [False, True])
+def test_official_world_downloads_dockerfile_only_for_workdir_fallback(
+    tmp_path, monkeypatch, explicit_workdir
+):
+    requested = []
+    template = '[environment]\nnetwork_mode="public"\n'
+    if explicit_workdir:
+        template += 'workdir="/explicit"\n'
+    template += '[verifier]\nenvironment_mode="shared"\n'
+    contents = {
+        "worlds/world/task.harbor.template.toml": template,
+        "worlds/world/environment/Dockerfile": "FROM debian\nWORKDIR /app\n",
+    }
+
+    def download(repo_id, filename, **kwargs):
+        requested.append(filename)
+        blob = tmp_path / ("template-blob" if filename.endswith("toml") else "dockerfile-blob")
+        blob.write_text(contents[filename])
+        path = tmp_path / "snapshot" / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(blob)
+        return str(path)
+
+    monkeypatch.setattr(taskset, "hf_hub_download", download)
+    spec = taskset._load_world_harbor_spec("test/tasks", "world", hf_revision=REVISION)
+    assert spec.workdir == ("/explicit" if explicit_workdir else "/app")
+    assert requested == (
+        ["worlds/world/task.harbor.template.toml"]
+        if explicit_workdir
+        else list(contents)
+    )
+
+
+def test_expected_world_guard_rejects_historical_artifact_before_snapshot_or_world_reads(exported_dataset):
+    rows, files, requests = exported_dataset
+    files["tasks.jsonl"] = json.dumps({
+        "task_id": "one", "world_id": "bigfinance-public-feather",
+        "instruction": rows[0]["instruction"], "requires_web_search": True,
+        "metadata": {"task_artifacts": {"inputs": False, "tests": True}},
+    })
+    with pytest.raises(ValueError, match="unexpected world ID.*bigfinance-public-feather"):
+        load(expected_world_ids=["bigfinance-public-feather-protected-v2"])
+    assert requests == ["tasks.jsonl"]
+
+
+def test_expected_world_guard_accepts_protected_rows_and_preserves_snapshot_mapping(exported_dataset):
+    rows, files, requests = exported_dataset
+    world = "bigfinance-public-feather-protected-v2"
+    files["tasks.jsonl"] = json.dumps({
+        "task_id": "one", "world_id": world, "instruction": rows[0]["instruction"],
+        "requires_web_search": True,
+        "metadata": {"task_artifacts": {"inputs": False, "tests": True}},
+    })
+    files["snapshot_manifest.json"] = json.dumps({world: {"id": "protected-snapshot", "kind": "compose"}})
+    files[f"worlds/{world}/task.harbor.template.toml"] = files["worlds/world/task.harbor.template.toml"]
+    files[f"worlds/{world}/environment/docker-compose.yaml"] = files["worlds/world/environment/docker-compose.yaml"]
+    [task] = load(expected_world_ids=[world])
+    assert task.data.world_id == world and task.data.e2b_snapshot_id == "protected-snapshot"
+    assert task.data.prompt[0].content == rows[0]["instruction"].strip()
+    assert requests == ["tasks.jsonl", "snapshot_manifest.json", f"worlds/{world}/task.harbor.template.toml",
+                        f"worlds/{world}/environment/docker-compose.yaml"]
+
+
+def test_expected_world_guard_checks_all_selected_rows_but_respects_task_selection(exported_dataset):
+    rows, files, requests = exported_dataset
+    rows[1]["world_id"] = "historical"
+    files["tasks.jsonl"] = "\n".join(json.dumps(row) for row in rows)
+    with pytest.raises(ValueError, match="unexpected world ID.*historical"):
+        load(expected_world_ids=["world"])
+    assert requests == ["tasks.jsonl"]
+    requests.clear()
+    [task] = load(task_ids=["one"], expected_world_ids=["world", "another-protected-world"])
+    assert task.data.task_id == "one" and task.data.e2b_snapshot_id == "snapshot"
+
+
+@pytest.mark.parametrize("worlds", [[], [""], ["   "], [False]])
+def test_expected_world_guard_requires_explicit_nonempty_world_ids(worlds):
+    with pytest.raises(ValidationError):
+        FeatherTasksetConfig(hf_dataset="test/tasks", hf_revision=REVISION, expected_world_ids=worlds)
+
+
+def test_environment_routes_expected_world_ids_to_taskset_before_snapshot_loading(exported_dataset):
+    from feather_train.environment import load_environment
+
+    _, _, requests = exported_dataset
+    env = load_environment(hf_dataset="test/tasks", hf_revision=REVISION,
+                           expected_world_ids=["protected"], enable_braintrust=False)
+    assert env.taskset.config.expected_world_ids == ["protected"]
+    with pytest.raises(ValueError, match="unexpected world ID"):
+        list(env.taskset.load())
+    assert requests == ["tasks.jsonl"]
 
 
 @pytest.mark.parametrize(

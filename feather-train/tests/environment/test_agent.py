@@ -1,13 +1,79 @@
 import json
+from unittest.mock import AsyncMock
 
 import httpx
+import pytest
+import verifiers.v1 as vf
 from feather_harness import ChatCompletionsModel
+from feather_harness.production import PRODUCTION_PROMPT
 from openai import AsyncOpenAI
 
 from feather_train import E2BRuntime, run_e2b
+from feather_train.harness import _model_settings_from_sampling
 
 
-async def test_shared_agent_loop_executes_remote_tools(sandbox):
+async def test_production_profile_reaches_model_without_a_sandbox():
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "test",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Done."},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    class Transport:
+        run = AsyncMock()
+        save_transcript = AsyncMock()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+    async with AsyncOpenAI(
+        api_key="test", http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    ) as client:
+        result = await run_e2b(
+            "Solve this task",
+            profile="prod",
+            enable_image_tools=False,
+            model_settings=_model_settings_from_sampling(
+                vf.Sampling(
+                    temperature=1,
+                    top_p=1,
+                    max_tokens=65536,
+                    provider={"only": ["baseten"], "allow_fallbacks": False},
+                )
+            ),
+            model=ChatCompletionsModel(client=client, model="test"),
+            transport=Transport(),
+        )
+    assert result.final_answer == "Done."
+    assert PRODUCTION_PROMPT in requests[0]["messages"][0]["content"]
+    assert "headless" not in requests[0]["messages"][0]["content"]
+    assert "view_image" not in {tool["function"]["name"] for tool in requests[0]["tools"]}
+    assert requests[0]["temperature"] == 1
+    assert requests[0]["top_p"] == 1
+    assert requests[0]["max_tokens"] == 65536
+    assert requests[0]["provider"] == {"only": ["baseten"], "allow_fallbacks": False}
+
+
+@pytest.mark.parametrize("profile", ["train", "prod"])
+async def test_shared_agent_loop_executes_remote_tools(sandbox, profile):
     requests = []
 
     def respond(request):
@@ -58,8 +124,14 @@ async def test_shared_agent_loop_executes_remote_tools(sandbox):
             transport=E2BRuntime(
                 sandbox, container=sandbox.container, host_runtime=sandbox.host_runtime
             ),
+            profile=profile,
         )
     assert result.final_answer == "Done."
+    instructions = requests[0]["messages"][0]["content"]
+    assert (PRODUCTION_PROMPT in instructions) is (profile == "prod")
+    if profile == "prod":
+        assert "headless" not in instructions
+        assert "Shell commands run locally with the host's permissions" not in instructions
     assert requests[1]["messages"][-1] == {
         "role": "tool",
         "tool_call_id": "write-1",

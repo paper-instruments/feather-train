@@ -16,9 +16,16 @@ from verifiers.v1 import SandboxError
 
 from feather_train.errors import NonRetryableHarnessError
 from feather_train.sandbox.paths import (
+    BAKED_TESTS_DIR,
     STATE_EXPORT_TOKEN_ENV,
     STATE_EXPORT_TOKEN_PATH,
     WORKSPACE_DIR,
+)
+from feather_train.tasks.harbor_spec import (
+    ArtifactSpec,
+    CollectHook,
+    EnvironmentMode,
+    HarborArtifact,
 )
 
 if TYPE_CHECKING:
@@ -32,6 +39,7 @@ COMPOSE_FILE = f"{ENV_DIR}/compose.train.yaml"
 COMPOSE_PROJECT = "apex"
 AGENT_CONTAINER = "agent"
 VERIFIER_CONTAINER = "verifier"
+SEPARATE_VERIFIER_IMAGE = "feather-separate-verifier"
 MCP_BASE_PORT = 5000
 WORKSPACE_MOUNT_ENV = "HARBOR_WORKSPACE_MOUNT"
 WORKSPACE_WRITE_ACCESS_ENV = "HARBOR_WORKSPACE_WRITE_ACCESS"
@@ -71,6 +79,7 @@ async def resume_compose_stack(
     session: SandboxIO,
     *,
     mcp_servers: list[McpServerSpec],
+    require_verifier: bool = True,
 ) -> ComposeRuntime:
     """Require the baked stack to be alive and rewrite MCP URLs for this sandbox.
 
@@ -105,7 +114,8 @@ async def resume_compose_stack(
     await _block_agent_host_ports(session, public_host_ports)
 
     await _wait_for_ports(session, port_by_service, endpoint_by_service)
-    await assert_verifier_container_running(session)
+    if require_verifier:
+        await assert_verifier_container_running(session)
     return ComposeRuntime(
         _mcp_urls(session, port_by_service, mcp_servers),
         state_export,
@@ -184,8 +194,17 @@ async def prepare_compose_grading(
     *,
     verifier_network: VerifierNetworkSpec | None = None,
     mount_submission_volume: bool = False,
+    environment_mode: EnvironmentMode | None = None,
+    collect_hooks: tuple[CollectHook, ...] = (),
+    artifacts: tuple[HarborArtifact, ...] = (),
 ) -> None:
-    """Stop solver ``main`` and attach grade-only privileges to the peer verifier."""
+    """Isolate grading. Peer-verifier worlds remove ``main``; shared worlds keep it."""
+    if environment_mode == "shared":
+        await _copy_baked_tests_into_container(session, AGENT_CONTAINER)
+        return
+    if environment_mode == "separate":
+        await _prepare_separate_verifier(session, collect_hooks, artifacts)
+        return
     command = _compose_command()
     await _sh(
         session,
@@ -687,10 +706,8 @@ def _mcp_urls(
         declared = urlsplit(spec.url)
         port = port_by_service[declared.hostname]
         updated.append(
-            McpServerSpec(
-                name=spec.name,
-                transport=spec.transport,
-                url=urlunsplit(
+            spec.model_copy(update={
+                "url": urlunsplit(
                     (
                         "https",
                         session.sandbox.get_host(port),
@@ -699,7 +716,7 @@ def _mcp_urls(
                         declared.fragment,
                     )
                 ),
-            )
+            })
         )
     logger.info("feather: MCP services: %s", [server.name for server in updated])
     return updated
@@ -754,6 +771,109 @@ def _compose_command() -> str:
     return (
         f"cd {ENV_DIR} && docker-compose -p {COMPOSE_PROJECT} "
         f"-f {WORLD_COMPOSE_FILE} -f {COMPOSE_FILE}"
+    )
+
+
+async def _prepare_separate_verifier(
+    session: SandboxIO,
+    collect_hooks: tuple[CollectHook, ...],
+    artifacts: tuple[HarborArtifact, ...],
+) -> None:
+    """Collect declared evidence, then grade in a fresh tests-image container."""
+    if not artifacts:
+        raise NonRetryableHarnessError("separate verifier requires artifact paths")
+    world_container = None
+    if any(hook.service == "world" for hook in collect_hooks) or any(
+        isinstance(artifact, ArtifactSpec) and artifact.service == "world"
+        for artifact in artifacts
+    ):
+        world_container = await _sh(
+            session,
+            f"{_compose_command()} ps -q world",
+            operation="resolve Harbor world service",
+            check=True,
+        )
+        if not world_container or len(world_container.splitlines()) != 1:
+            raise NonRetryableHarnessError("Harbor world service is absent or ambiguous")
+    for hook in collect_hooks:
+        container = world_container if hook.service == "world" else AGENT_CONTAINER
+        await _sh(
+            session,
+            "docker exec -u root "
+            f"{shlex.quote(container)} /bin/bash -lc {shlex.quote(hook.command)}",
+            hook.timeout_sec,
+            operation="run Harbor collect hook",
+            check=True,
+        )
+    host_root = "/tmp/feather-separate-artifacts"
+    await _sh(
+        session,
+        f"rm -rf {host_root} && mkdir -p {host_root}",
+        operation="stage collect artifact host dir",
+        check=True,
+    )
+    for artifact in artifacts:
+        path = artifact.source if isinstance(artifact, ArtifactSpec) else artifact
+        container = world_container if isinstance(artifact, ArtifactSpec) and artifact.service == "world" else AGENT_CONTAINER
+        await _sh(
+            session,
+            f"docker cp {shlex.quote(container)}:{shlex.quote(path)} "
+            f"{host_root}/{shlex.quote(PurePosixPath(path).name)}",
+            operation=f"copy collect artifact {path}",
+            check=True,
+        )
+    await _sh(
+        session,
+        f"test -f {shlex.quote(BAKED_TESTS_DIR)}/Dockerfile",
+        operation="require baked tests Dockerfile",
+        check=True,
+    )
+    await _sh(
+        session,
+        f"docker image inspect {SEPARATE_VERIFIER_IMAGE}",
+        operation="require baked tests-image",
+        check=True,
+    )
+    command = _compose_command()
+    await _sh(
+        session,
+        f"{command} stop main 2>&1 && {command} rm -f main 2>&1",
+        300,
+        operation="stop agent container",
+        check=True,
+    )
+    await _sh(
+        session,
+        f"docker rm -f {VERIFIER_CONTAINER} >/dev/null 2>&1 || true; "
+        f"docker run -d --name {VERIFIER_CONTAINER} --entrypoint sleep "
+        f"{SEPARATE_VERIFIER_IMAGE} infinity",
+        300,
+        operation="start fresh tests-image verifier",
+        check=True,
+    )
+    await _copy_baked_tests_into_container(session, VERIFIER_CONTAINER)
+    for artifact in artifacts:
+        path = artifact.source if isinstance(artifact, ArtifactSpec) else artifact
+        dest_dir = str(PurePosixPath(path).parent)
+        await _sh(
+            session,
+            f"docker exec {VERIFIER_CONTAINER} mkdir -p {shlex.quote(dest_dir)} && "
+            f"docker cp {host_root}/{shlex.quote(PurePosixPath(path).name)} "
+            f"{VERIFIER_CONTAINER}:{shlex.quote(path)}",
+            operation=f"restore collect artifact {path}",
+            check=True,
+        )
+
+
+async def _copy_baked_tests_into_container(session: SandboxIO, container: str) -> None:
+    """Official modes grade inside agent/tests images that do not mount host ``BAKED_TESTS_DIR``."""
+    await _sh(
+        session,
+        f"docker exec -u root {shlex.quote(container)} mkdir -p {shlex.quote(BAKED_TESTS_DIR)} && "
+        f"docker cp {shlex.quote(BAKED_TESTS_DIR)}/. "
+        f"{shlex.quote(container)}:{shlex.quote(BAKED_TESTS_DIR)}/",
+        operation=f"copy baked tests into {container}",
+        check=True,
     )
 
 

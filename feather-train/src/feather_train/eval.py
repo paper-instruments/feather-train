@@ -14,6 +14,7 @@ from statistics import mean
 import httpx
 import verifiers.v1 as vf
 from feather_harness.core.compaction import CompactionConfig
+from feather_harness.production import Profile
 from pydantic import BaseModel, ConfigDict, Field, FilePath
 from verifiers.v1.clients import EvalClient
 from verifiers.v1.errors import model_error
@@ -45,11 +46,16 @@ class EvalConfig(BaseModel):
     braintrust_project: str
     braintrust_experiment: str | None = None
     enable_image_tools: bool = False
+    capture_deliverables: bool = False
+    capture_paths: tuple[str, ...] = ()
+    profile: Profile = "train"
+    additional_instructions: str | None = None
     max_turns: int = Field(250, ge=1)
     sandbox_timeout_minutes: int = Field(180, gt=0)
     rollout_max_retries: int = Field(2, ge=0)
     compaction: CompactionConfig = Field(default_factory=lambda: CompactionConfig(enabled=True))
     grading: GradingConfig = Field(default_factory=GradingConfig)
+
 
 
 class EvalModelClient(EvalClient):
@@ -97,6 +103,11 @@ async def evaluate(config: EvalConfig) -> dict:
         max_tasks=config.max_tasks,
         max_turns=config.max_turns,
         enable_image_tools=config.enable_image_tools,
+        capture_deliverables=config.capture_deliverables,
+        capture_paths=config.capture_paths,
+        capture_output_dir=str(config.output_dir / "deliverables"),
+        profile=config.profile,
+        additional_instructions=config.additional_instructions,
         sandbox_timeout_minutes=config.sandbox_timeout_minutes,
         generation_timeout_seconds=config.model_request_timeout_seconds,
         rollout_max_retries=config.rollout_max_retries,
@@ -212,7 +223,8 @@ def main() -> None:
     parser.add_argument("config", type=Path)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    config = EvalConfig.model_validate_json(args.config.read_text())
+    values = json.loads(args.config.read_text())
+    config = EvalConfig.model_validate(values)
     summary = asyncio.run(evaluate(config))
     raise SystemExit(1 if summary["failed"] else 0)
 

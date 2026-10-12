@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tomllib
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
@@ -26,7 +28,13 @@ from pydantic import (
 
 from feather_train.grading.rewards import harbor_grader_reward
 from feather_train.sandbox.paths import WORKSPACE_DIR
-from feather_train.tasks.harbor_spec import HarborSpec, NetworkMode, parse_harbor_spec
+from feather_train.tasks.harbor_spec import (
+    CollectHook,
+    HarborArtifact,
+    HarborSpec,
+    NetworkMode,
+    parse_harbor_spec,
+)
 from feather_train.tasks.paths import is_safe_task_id
 
 logger = logging.getLogger(__name__)
@@ -210,6 +218,11 @@ class FeatherTaskData(vf.TaskData):
     grading_evidence_mode: GradingEvidenceMode | None = None
     requires_web_search: bool
     network_mode: NetworkMode
+    environment_mode: Literal["shared", "separate"] | None = None
+    workdir: str | None = None
+    collect_hooks: tuple[CollectHook, ...] = ()
+    artifacts: tuple[HarborArtifact, ...] = ()
+    verifier_timeout_sec: float | None = None
     hf_dataset: NonEmptyString
     hf_revision: ImmutableRevision
     task_artifacts: TaskArtifacts = Field(default_factory=TaskArtifacts)
@@ -221,6 +234,15 @@ class FeatherTaskData(vf.TaskData):
     mcp_servers: list[McpServerSpec]
     rollout_group_id: str | None = None
     sampled_policy_version: int | str | None = None
+
+    @model_validator(mode="after")
+    def factory_uses_peer_verifier(self) -> Self:
+        if self.source == "factory" and self.environment_mode is not None:
+            raise ValueError(
+                f"{self.hf_dataset}: Factory task {self.task_id} in world {self.world_id} "
+                "requires the baked peer verifier; environment_mode must be unset"
+            )
+        return self
 
 
 class FeatherTask(vf.Task[FeatherTaskData]):
@@ -244,6 +266,7 @@ class FeatherTasksetConfig(vf.TasksetConfig):
     hf_dataset: NonEmptyString
     hf_revision: ImmutableRevision
     task_ids: list[str] | None = None
+    expected_world_ids: list[NonEmptyString] | None = Field(default=None, min_length=1)
     max_tasks: int | None = None
     system_prompt: str | None = None
 
@@ -258,6 +281,7 @@ class FeatherTaskset(vf.Taskset[FeatherTask, FeatherTasksetConfig]):
             self.config.max_tasks,
             hf_revision=self.config.hf_revision,
             system_prompt=self.config.system_prompt or CODING_SYSTEM_PROMPT,
+            expected_world_ids=self.config.expected_world_ids,
         )
         for task in tasks:
             yield FeatherTask(task, self.config.task)
@@ -270,6 +294,7 @@ def _load_tasks(
     *,
     hf_revision: str,
     system_prompt: str,
+    expected_world_ids: list[str] | None = None,
 ) -> list[FeatherTaskData]:
     tasks = _load_selected_tasks(
         hf_dataset,
@@ -277,6 +302,13 @@ def _load_tasks(
         max_tasks,
         hf_revision=hf_revision,
     )
+    if expected_world_ids is not None:
+        unexpected = sorted({task.world_id for task in tasks} - set(expected_world_ids))
+        if unexpected:
+            raise ValueError(
+                f"{hf_dataset}: selected tasks have unexpected world ID(s): {unexpected[:10]}; "
+                f"expected one of {expected_world_ids}"
+            )
     factory_rubrics = {
         task.task_id: _normalize_rubric(task.rubric)
         for task in tasks
@@ -349,6 +381,11 @@ def _load_tasks(
                 grading_evidence_mode=grading_evidence_mode,
                 requires_web_search=task.requires_web_search,
                 network_mode=harbor_spec.network_mode,
+                environment_mode=harbor_spec.environment_mode,
+                workdir=harbor_spec.workdir,
+                collect_hooks=harbor_spec.collect_hooks,
+                artifacts=harbor_spec.artifacts,
+                verifier_timeout_sec=harbor_spec.verifier_timeout_sec,
                 hf_dataset=hf_dataset,
                 hf_revision=hf_revision,
                 task_artifacts=task.metadata.task_artifacts,
@@ -428,7 +465,29 @@ def _load_world_harbor_spec(
             "every Compose world must declare network_mode and MCP servers there"
         ) from exc
 
-    spec = parse_harbor_spec(toml_path, where=f"{hf_dataset}: world {world_id}")
+    with Path(toml_path).open("rb") as handle:
+        template = tomllib.load(handle)
+    verifier = template.get("verifier", {})
+    environment = template.get("environment", {})
+    dockerfile_path = None
+    if (
+        isinstance(verifier, dict)
+        and verifier.get("environment_mode") in {"shared", "separate"}
+        and isinstance(environment, dict)
+        and environment.get("workdir") is None
+    ):
+        try:
+            dockerfile_path = _download(
+                hf_dataset, f"worlds/{world_id}/environment/Dockerfile", hf_revision=hf_revision
+            )
+        except EntryNotFoundError as exc:
+            raise ValueError(
+                f"{hf_dataset}: world {world_id} environment_mode requires workdir "
+                "or an environment/Dockerfile WORKDIR"
+            ) from exc
+    spec = parse_harbor_spec(
+        toml_path, where=f"{hf_dataset}: world {world_id}", dockerfile_path=dockerfile_path
+    )
     logger.info(
         "feather_train: world %s declares %d MCP server(s), network_mode=%s",
         world_id,

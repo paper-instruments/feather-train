@@ -4,6 +4,10 @@ Source: [Train PR 636](https://github.com/paper-instruments/train/pull/636),
 `80c1deb8fe9eaceba5a4bc797d798c5434e63184`,
 `feather-workspace/feather-harness/`. Destination base: `e4a1b14`.
 
+The follow-up [Train and Eval integration sync](../integration-train-stack-parity/spec.md)
+extends the same source revision to the sibling packages. This audit describes
+the original Harness sync; the follow-up records its own verification.
+
 All 2,650 source package files exist in the destination. 2,633 match byte for byte.
 The other 17 retain standalone capabilities or describe their merged behavior:
 

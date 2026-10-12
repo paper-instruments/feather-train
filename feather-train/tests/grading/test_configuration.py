@@ -44,5 +44,6 @@ async def test_judge_environment_preserves_config_and_task_identity(
     assert assignments.get("HARBOR_GRADING_EVIDENCE_MODE") == evidence_mode
     assert assignments["HARBOR_TASK_ID"] == "task-1"
     assert assignments["HARBOR_WORLD_ID"] == "world-1"
+    assert any("rm -rf -- /logs &&" in command for command in sandbox.commands)
     assert assignments["HARBOR_BRAINTRUST_PARENT"] == "parent span"
     assert assignments["BRAINTRUST_PROJECT"] == "eval project"

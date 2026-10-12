@@ -11,10 +11,10 @@ from feather_train.grading.grader import GradingConfig, HarborGradingError, grad
 from feather_train.sandbox import io
 from feather_train.sandbox.lifecycle import CommandOutput, SandboxIO
 
-from .helpers import GraderSandbox, task
+from .helpers import GraderSandbox, _is_harbor_test_command, task
 
 
-@pytest.mark.parametrize("filename", ["reward.txt", "reward_detail.json"])
+@pytest.mark.parametrize("filename", ["reward.txt", "reward.json", "reward_detail.json"])
 async def test_transient_result_read_recovers_without_repeating_grader(filename):
     class InterruptedRead(GraderSandbox):
         reads = 0
@@ -26,7 +26,7 @@ async def test_transient_result_read_recovers_without_repeating_grader(filename)
                     raise SandboxError("connection lost")
             return await super().exec(*args, **kwargs)
 
-    sandbox = InterruptedRead()
+    sandbox = InterruptedRead(reward_json=b'{"reward":0.75}' if filename == "reward.json" else None)
     result = await grade_task(
         task(),
         sandbox,
@@ -74,7 +74,7 @@ async def test_reward_read_exhausts_local_retries_before_failing_grade(monkeypat
     assert waits == [1, 2, 4, 8, 16, 32, 64, 128, 256]
 
 
-@pytest.mark.parametrize("filename", ["reward.txt", "reward_detail.json"])
+@pytest.mark.parametrize("filename", ["reward.txt", "reward.json", "reward_detail.json"])
 async def test_authentication_failure_is_not_retried_or_hidden_as_optional_detail(filename):
     failure = AuthenticationException("credentials rejected")
 
@@ -110,7 +110,7 @@ async def test_failed_judge_cannot_leave_rewards_for_the_next_attempt(sandbox, w
     class JudgeWithPartialOutputs(GraderSandbox):
         async def exec(self, *args, timeout=None):
             command = args[-1]
-            if command.endswith("/bin/bash /tests/test.sh"):
+            if _is_harbor_test_command(command):
                 self.test_runs += 1
                 if self.test_runs == 1:
                     written = await session.exec(
@@ -146,7 +146,7 @@ async def test_failed_judge_cannot_leave_rewards_for_the_next_attempt(sandbox, w
         assert result.num_met is None
         assert result.num_criteria is None
     else:
-        with pytest.raises(HarborGradingError, match="reward.txt read failed"):
+        with pytest.raises(HarborGradingError, match="reward read failed"):
             await grade_task(
                 task(),
                 judge,

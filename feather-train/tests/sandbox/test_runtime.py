@@ -58,6 +58,18 @@ def test_prod_runtime_bundle_materializes_production_skills(tmp_path):
     assert b"professional" in (workspace / ".agents/xlsx/SKILL.md").read_bytes().lower()
 
 
+async def test_install_runtime_installs_skills_in_requested_workspace(tmp_path):
+    archive = tmp_path / "runtime.tar.gz"
+    archive.write_bytes(b"runtime bundle")
+    sandbox = SimpleNamespace(
+        commands=SimpleNamespace(run=AsyncMock()),
+        files=SimpleNamespace(write=AsyncMock(), remove=AsyncMock()),
+    )
+    await install_runtime(sandbox, archive, workspace="/app")
+    command = sandbox.commands.run.await_args.args[0]
+    assert "install_skills.py /app --overwrite" in command
+
+
 @pytest.mark.parametrize("installation_fails", [False, True])
 async def test_runtime_cleanup_failure_preserves_installation_result(
     tmp_path, caplog, installation_fails

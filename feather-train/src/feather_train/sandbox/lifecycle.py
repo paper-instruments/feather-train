@@ -167,10 +167,18 @@ class SandboxIO:
 class ComposeSandbox:
     sandbox: AsyncSandbox
     runtime: ComposeRuntime
+    egress_denylist_installed: bool = False
 
     @classmethod
     @asynccontextmanager
-    async def start(cls, task: FeatherTaskData, *, timeout: int = 10800, max_attempts: int = 3):
+    async def start(
+        cls,
+        task: FeatherTaskData,
+        *,
+        timeout: int = 10800,
+        max_attempts: int = 3,
+        blocked_egress_domains: tuple[str, ...] = (),
+    ):
         from feather_train.errors import NON_RETRYABLE_CAUSES
 
         async for attempt in AsyncRetrying(
@@ -184,7 +192,9 @@ class ComposeSandbox:
             reraise=True,
         ):
             with attempt:
-                world = await cls._start(task, timeout=timeout)
+                world = await cls._start(
+                    task, timeout=timeout, blocked_egress_domains=blocked_egress_domains
+                )
         # Retrying must end before yielding: an agent/grader failure must never
         # repeat a completed rollout inside the sandbox-start policy.
         try:
@@ -193,9 +203,12 @@ class ComposeSandbox:
             await world.close()
 
     @classmethod
-    async def _start(cls, task: FeatherTaskData, *, timeout: int) -> ComposeSandbox:
+    async def _start(
+        cls, task: FeatherTaskData, *, timeout: int, blocked_egress_domains: tuple[str, ...]
+    ) -> ComposeSandbox:
         from feather_train.errors import NonRetryableHarnessError
         from feather_train.sandbox.compose import invoke_state_hook, resume_compose_stack
+        from feather_train.sandbox.egress import install_agent_egress_denylist
 
         if not task.e2b_snapshot_id:
             raise NonRetryableHarnessError("FeatherEnv requires an offline-baked E2B snapshot")
@@ -209,6 +222,7 @@ class ComposeSandbox:
             runtime = await resume_compose_stack(
                 SandboxIO(sandbox),
                 mcp_servers=list(task.mcp_servers),
+                require_verifier=task.environment_mode is None,
             )
             await stage_task_inputs(sandbox, task)
             if (
@@ -220,7 +234,11 @@ class ComposeSandbox:
                     runtime.state_export,
                     runtime.state_export.initialize_path,
                 )
-            return cls(sandbox, runtime)
+            # Without internet access there is nothing to filter.
+            restrict_egress = bool(blocked_egress_domains) and task.network_mode == "public"
+            if restrict_egress:
+                await install_agent_egress_denylist(SandboxIO(sandbox), blocked_egress_domains)
+            return cls(sandbox, runtime, egress_denylist_installed=restrict_egress)
         except BaseException:
             await _close_sandbox(sandbox)
             raise
@@ -228,21 +246,60 @@ class ComposeSandbox:
     async def close(self) -> None:
         await _close_sandbox(self.sandbox)
 
+    async def stage_agent_trace(self, payload: bytes) -> None:
+        """Stage Feather evidence before Harbor copies declared agent artifacts."""
+        from feather_train.errors import NonRetryableHarnessError
+
+        upload = f"/tmp/feather-agent-trace-{uuid.uuid4().hex}.json"
+        await write_file(self.sandbox, upload, payload)
+        try:
+            prepare = (
+                "test ! -L /logs && mkdir -p /logs/agent && "
+                "test ! -L /logs/agent && "
+                "test ! -e /logs/agent/trajectory.json && "
+                "test ! -L /logs/agent/trajectory.json"
+            )
+            result = await SandboxIO(self.sandbox).exec(
+                "docker exec -u root agent sh -c "
+                f"{shlex.quote(prepare)} && "
+                f"docker cp {shlex.quote(upload)} agent:/logs/agent/trajectory.json",
+                shell=True,
+                timeout=120,
+            )
+            if not result.ok():
+                raise NonRetryableHarnessError(
+                    "Could not stage the declared agent trajectory artifact before grading"
+                )
+        finally:
+            try:
+                await self.sandbox.files.remove(
+                    upload, user="root", request_timeout=REQUEST_TIMEOUT
+                )
+            except Exception:
+                logger.warning("Could not remove temporary agent trace upload", exc_info=True)
+
     async def prepare_grading(self, task: FeatherTaskData) -> SandboxIO:
         from feather_train.sandbox.compose import (
             assert_agent_container_survived,
             prepare_compose_grading,
         )
+        from feather_train.sandbox.egress import lift_agent_egress_denylist
 
         host = SandboxIO(self.sandbox)
         await assert_agent_container_survived(host)
+        if self.egress_denylist_installed:
+            await lift_agent_egress_denylist(host)
         await prepare_compose_grading(
             host,
             self.runtime.state_export,
             verifier_network=self.runtime.verifier_network,
             mount_submission_volume=task.submission_transport == "submit_tool",
+            environment_mode=task.environment_mode,
+            collect_hooks=tuple(task.collect_hooks),
+            artifacts=task.artifacts,
         )
-        return SandboxIO(self.sandbox, container="verifier")
+        container = "agent" if task.environment_mode == "shared" else "verifier"
+        return SandboxIO(self.sandbox, container=container)
 
 
 async def stage_task_inputs(sandbox: AsyncSandbox, task: FeatherTaskData) -> None:

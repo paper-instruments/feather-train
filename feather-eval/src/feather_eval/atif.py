@@ -7,9 +7,11 @@ import json
 from importlib.metadata import version
 from pathlib import Path
 
-from feather_harness import RunResult
+from feather_harness import ProviderUsage, RunResult, UsageTotals
 from feather_harness.core.messages import AssistantMessage, Message, ToolMessage
 from harbor.models.trajectories.agent import Agent
+from harbor.models.trajectories.final_metrics import FinalMetrics
+from harbor.models.trajectories.metrics import Metrics
 from harbor.models.trajectories.observation import Observation
 from harbor.models.trajectories.observation_result import ObservationResult
 from harbor.models.trajectories.step import Step
@@ -54,6 +56,7 @@ def to_atif(
             compaction_count += 1
             name = f"trajectory.summarization-{compaction_count}.json"
         steps = _steps(segment.input + segment.messages, copied_inputs=len(segment.input))
+        _attach_usage(steps, segment.calls)
         if index == 0:
             # Supplied assistant history remains context, not new training targets.
             for step in steps:
@@ -84,10 +87,9 @@ def to_atif(
                 )
             )
     if trajectories:
-        trajectories["trajectory.json"].extra.update(
-            stop_reason=result.stop_reason,
-            stop_message=result.stop_message,
-        )
+        root = trajectories["trajectory.json"]
+        root.extra.update(stop_reason=result.stop_reason, stop_message=result.stop_message)
+        root.final_metrics = _final_metrics(result.usage())
     return trajectories
 
 
@@ -163,6 +165,56 @@ def _steps(messages: tuple[Message, ...], *, copied_inputs: int = 0) -> list[Ste
             )
         steps.append(step)
     return steps
+
+
+def _attach_usage(steps: list[Step], calls: tuple[ProviderUsage, ...]) -> None:
+    """Give each model-produced agent step its own call's provider-billed usage."""
+    produced = [step for step in steps if step.source == "agent" and not step.is_copied_context]
+    if not calls:
+        return
+    if len(calls) != len(produced):
+        raise ValueError(
+            f"segment has {len(calls)} model calls for {len(produced)} produced agent steps"
+        )
+    for step, call in zip(produced, calls, strict=True):
+        step.llm_call_count = 1
+        step.metrics = Metrics(
+            prompt_tokens=call.prompt_tokens,
+            completion_tokens=call.completion_tokens,
+            cached_tokens=call.cached_tokens,
+            cost_usd=call.cost_usd,
+            extra=_present(
+                reasoning_tokens=call.reasoning_tokens,
+                cache_write_tokens=call.cache_write_tokens,
+                is_byok=call.is_byok,
+                openrouter_cost_usd=call.openrouter_cost_usd,
+                # Non-BYOK `cost` already includes the upstream charge.
+                upstream_cost_usd=call.upstream_cost_usd if call.is_byok else None,
+                provider=call.provider,
+                response_id=call.response_id,
+                kind=call.kind,
+            ),
+        )
+
+
+def _final_metrics(totals: UsageTotals) -> FinalMetrics | None:
+    if not totals.model_calls:
+        return None
+    return FinalMetrics(
+        total_prompt_tokens=totals.prompt_tokens,
+        total_completion_tokens=totals.completion_tokens,
+        total_cached_tokens=totals.cached_tokens,
+        total_cost_usd=totals.cost_usd,
+        extra=totals.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude={"prompt_tokens", "completion_tokens", "cached_tokens", "cost_usd"},
+        ),
+    )
+
+
+def _present(**values):
+    return {key: value for key, value in values.items() if value is not None} or None
 
 
 def _observation_content(content):

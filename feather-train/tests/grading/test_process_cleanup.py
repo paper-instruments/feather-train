@@ -15,7 +15,7 @@ async def test_failed_grader_cannot_overwrite_retry_reward(sandbox, monkeypatch,
     session = SandboxIO(sandbox, container=sandbox.container, host_runtime=sandbox.host_runtime)
 
     async def wait_ready():
-        async with asyncio.timeout(15):
+        async with asyncio.timeout(5):
             while not (await session.exec("test", "-f", "/filesystem/ready")).ok():
                 await asyncio.sleep(0.02)
 
@@ -35,7 +35,7 @@ async def test_failed_grader_cannot_overwrite_retry_reward(sandbox, monkeypatch,
     )
     attempt = asyncio.create_task(
         _run_harbor_grader_attempt(
-            session, command, attempt=1, timeout=5 if failure == "timeout" else 10, steps=[]
+            session, command, attempt=1, timeout=1 if failure == "timeout" else 10, steps=[]
         )
     )
     await wait_ready()
