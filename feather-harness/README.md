@@ -89,7 +89,9 @@ the system prompt lists each skill's name and description. The model reads the
 
 ### Context compaction
 
-Compaction is off by default and lives in
+Compaction is off by default in the CLI and `run_local`; enable it with
+`"compaction": {"enabled": true, "context_window_tokens": ...}` set to your model's
+real window. Feather Train's training and eval configs turn it on. It lives in
 [`core/compaction.py`](src/feather_harness/core/compaction.py), called from the loop
 in [`core/runner.py`](src/feather_harness/core/runner.py).
 
