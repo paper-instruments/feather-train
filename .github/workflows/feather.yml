@@ -33,7 +33,7 @@ jobs:
       - name: Install workspace dependencies
         run: uv sync --all-packages --all-extras --no-extra token-count --locked
       - name: Lint
-        run: uv run --no-sync ruff check feather-harness/src feather-harness/tests feather-train/src feather-train/tests feather-eval/src feather-eval/tests
+        run: uv run --no-sync ruff check feather-harness/src feather-harness/tests feather-train/src feather-train/tests feather-eval/src feather-eval/tests scripts
       - name: Harness tests
         run: uv run --no-sync pytest -c feather-harness/pyproject.toml feather-harness/tests -q
       - name: Train tests without Docker
@@ -84,6 +84,10 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.14"
+      - name: Verify isolated CLI installation
+        run: |
+          bash -n install.sh
+          uv run --no-project --python 3.12 python scripts/check_install.py
       - name: Build wheels and source distributions
         run: uv build --all-packages --out-dir dist
       - name: Install wheels outside the checkout

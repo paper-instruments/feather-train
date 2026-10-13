@@ -17,25 +17,75 @@ and PDFs using specialized Paper packages.
 
 ## Install and run
 
-Requires Linux, Python 3.12+, Bash, ripgrep, and uv. PDF rendering also needs Poppler
-(`poppler-utils` on Debian/Ubuntu). From the repository root:
+The repository's [installer](../install.sh) supports macOS and Linux. It requires
+Bash, curl, and Git, and downloads its own uv and managed Python 3.12. Once the
+script is merged and the repository is publicly accessible:
 
 ```bash
-uv sync --package feather-harness --extra office
-mkdir -p workspace
+curl -fsSL https://raw.githubusercontent.com/paper-instruments/feather-train/main/install.sh | bash
+```
 
-# Export OPENAI_API_KEY first. For an unauthenticated local server, use a placeholder.
-uv run --package feather-harness --extra office feather \
+For the current private repository or an unmerged installer PR, use an authenticated
+checkout containing the script and run from the repository root:
+
+```bash
+FEATHER_SOURCE_DIR="$PWD" bash install.sh
+```
+
+The installer uses the repository lockfile to install Harness with the `office`
+extra into `~/.local/share/feather/versions/<installation>/venv`. This includes
+`paper-docx`, `paper-pptx`, `paper-xlsx`, and the PDF libraries. Python packages stay
+in this Feather environment, regardless of the directory or active virtualenv
+from which you install. It does not use system pip, install Train or Eval, require
+sudo, or modify shell profiles.
+
+The launcher at `~/.local/bin/feather` sets `VIRTUAL_ENV` and puts Feather's virtualenv
+first on `PATH`. It clears inherited `PYTHONHOME` and `PYTHONPATH` and disables
+user-site packages. Both the CLI and the model's `python` and `python3` shell
+commands therefore use Feather's packages without activating an environment.
+If `~/.local/bin` is not on `PATH`, use the full launcher path below or add that
+directory yourself.
+
+```bash
+mkdir -p workspace
+export OPENAI_API_KEY=YOUR_API_KEY
+
+~/.local/bin/feather \
   --model YOUR_MODEL --base-url http://localhost:8000/v1 \
   --workdir "$PWD/workspace" "Summarize the documents in this workspace into a briefing.md file." > run.json
 ```
 
 Use the model identifier and endpoint supplied by your provider. Omit `--base-url`
-for the OpenAI client's default endpoint.
+for the OpenAI client's default endpoint. For an unauthenticated local server,
+use a placeholder API key. The workspace must already exist; running the CLI
+installs skills and writes logs there. Installation itself does not write into
+your working directory.
 
-The `office` extra installs the three Paper packages and the PDF authoring, extraction,
-and rendering libraries used by the bundled skills. For an installed release, use
-`uv pip install "feather-harness[office]"`. The Paper packages replace `python-docx`,
+Rerun the installer to update. It builds a fresh version and switches the `current`
+symlink only after installation succeeds, retaining the previous version. Configure
+the installer with environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FEATHER_INSTALL_DIR` | `~/.local/share/feather` | Installation root; overrides must be absolute paths. |
+| `FEATHER_BIN_DIR` | `~/.local/bin` | Launcher directory; overrides must be absolute paths. |
+| `FEATHER_REF` | `main` | Repository branch, tag, or commit to install. |
+| `FEATHER_REPO` | `https://github.com/paper-instruments/feather-train.git` | Git URL used for remote installations. |
+| `FEATHER_SOURCE_DIR` | Unset | Absolute path to a local checkout to install instead. |
+
+For example, install a pinned version from a local copy of the installer with
+`FEATHER_REF=<full-commit-sha> bash install.sh`. To uninstall the default installation:
+
+```bash
+rm -f "$HOME/.local/bin/feather"
+rm -rf "$HOME/.local/share/feather"
+```
+
+If you customized the directories, remove the launcher and installation root at
+those paths instead. Workspace files, skills, and run logs remain in their original
+locations.
+
+The Paper packages replace `python-docx`,
 `python-pptx`, and `openpyxl`; do not install those upstream distributions alongside them.
 System binaries are installed separately from the Python extra. On Debian/Ubuntu:
 
@@ -48,8 +98,23 @@ sudo apt-get install -y libreoffice-calc tesseract-ocr
 
 LibreOffice is needed for `openpyxl.oracle` recalculation. Tesseract provides OCR
 for scanned documents; install language packs for the languages you need.
-Shell commands inherit your `PATH` and Python environment, and run with your OS
-permissions.
+Shell commands run with your OS permissions and inherit environment variables,
+including provider credentials. The installer manages Python dependencies;
+external programs such as ripgrep, Poppler, LibreOffice, and Tesseract remain
+system prerequisites. On macOS, install the corresponding tools using your system
+package manager.
+
+For source development, use Python 3.12+ and uv from the repository root:
+
+```bash
+uv sync --package feather-harness --extra office --locked
+uv run --package feather-harness --extra office --locked feather \
+  --model YOUR_MODEL --workdir ./workspace "Summarize this workspace." > run.json
+```
+
+This source workflow uses the repository's `.venv`. Use `uv run` or activate it so
+model shell commands see its packages. Harness is not currently published on PyPI;
+library consumers should use the [pinned Git source configuration](../README.md#use-the-packages-from-another-repository).
 
 ## Configuration
 
@@ -68,7 +133,7 @@ JSON config supports model settings, context compaction, and MCP servers. For ex
 ```
 
 ```bash
-cat task.txt | uv run --package feather-harness --extra office feather --config config.json - > run.json
+cat task.txt | ~/.local/bin/feather --config config.json - > run.json
 ```
 
 CLI flags override matching config fields. The workspace must already exist. Choose

@@ -18,23 +18,49 @@ manages their development dependencies and lockfile.
 
 ## Run Feather locally
 
-Use Linux with Python 3.12+, uv, Bash, and ripgrep. PDF rendering also needs Poppler.
-See [Harness setup](feather-harness/README.md#install-and-run) for system packages.
-From this workspace directory:
+The [installer](install.sh) supports macOS and Linux and requires Bash, curl, and
+Git. Once the script is merged and this repository is accessible publicly, install
+with:
 
 ```bash
-uv sync --package feather-harness --extra office --locked
+curl -fsSL https://raw.githubusercontent.com/paper-instruments/feather-train/main/install.sh | bash
+```
+
+While this repository is private or the script is only in a PR, use an authenticated
+checkout containing the script. From that checkout:
+
+```bash
+FEATHER_SOURCE_DIR="$PWD" bash install.sh
+```
+
+The installer provisions its own uv and Python 3.12, then installs the CLI, Paper
+document packages, and PDF libraries into a dedicated Feather virtual environment
+under `~/.local/share/feather/`. It does not install Python packages into your
+current directory, active environment, or system Python. The launcher at
+`~/.local/bin/feather` sets the execution environment so the model's `python` and
+`python3` shell commands use those installed packages. No activation is needed.
+If `~/.local/bin` is not on your `PATH`, invoke `~/.local/bin/feather` directly or
+add that directory to `PATH` yourself; the installer does not edit shell profiles.
+
+Install ripgrep separately; PDF rendering needs Poppler, and spreadsheet
+recalculation needs LibreOffice. See [Harness setup](feather-harness/README.md#install-and-run)
+for system packages and installation options. Then run:
+
+```bash
 mkdir -p workspace
 export OPENAI_API_KEY=YOUR_API_KEY
 
-uv run --package feather-harness --extra office feather \
+~/.local/bin/feather \
   --model YOUR_MODEL --base-url https://YOUR_PROVIDER/v1 \
   --workdir "$PWD/workspace" \
   "Summarize the documents in this workspace into briefing.md." > run.json
 ```
 
-Put your input files in `workspace/`. The `office` extra supplies the Paper packages
-and PDF libraries. `run.json` records the agent's execution trace.
+Put your input files in `workspace/`. `run.json` contains the final answer and the
+agent's execution trace. The model identifier and endpoint come from your provider;
+omit `--base-url` for the OpenAI client's default endpoint. Shell tools run with
+your OS permissions. Running Feather creates skill and log directories inside the
+selected workspace.
 
 For evaluation, follow the [Harbor example](feather-eval/README.md#first-run).
 For training, start with [Feather Train](feather-train/README.md): it takes task
@@ -68,6 +94,10 @@ Source and verification records for the package sync are in
 From this workspace directory:
 
 ```bash
+uv sync --package feather-harness --extra office --locked
+uv run --package feather-harness --extra office --locked feather \
+  --model YOUR_MODEL --workdir ./workspace "Summarize this workspace."
+
 uv sync --all-packages --all-extras --no-extra token-count --locked
 uv build --all-packages
 ```
