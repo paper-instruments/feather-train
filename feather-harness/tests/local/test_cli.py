@@ -58,9 +58,10 @@ def model_server(replies):
             status, reply = replies[index]
             if callable(reply):
                 reply = reply()
-            body = json.dumps(reply).encode()
+            streamed = request.get("stream") and status == 200
+            body = (_as_sse(reply) if streamed else json.dumps(reply)).encode()
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "text/event-stream" if streamed else "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             try:
@@ -80,6 +81,22 @@ def model_server(replies):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def _as_sse(reply):
+    choice = reply["choices"][0]
+    message = choice["message"]
+    delta = {
+        "role": "assistant",
+        "content": message.get("content"),
+        "tool_calls": [{"index": i, **call} for i, call in enumerate(message.get("tool_calls") or [])],
+    }
+    base = {"id": reply["id"], "object": "chat.completion.chunk", "created": 0, "model": reply["model"]}
+    events = [
+        {**base, "choices": [{"index": 0, "delta": delta, "finish_reason": choice["finish_reason"]}]},
+        {**base, "choices": [], "usage": reply.get("usage")},
+    ]
+    return "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
 
 
 def cli(workspace, *args, input=None):
@@ -220,11 +237,15 @@ async def test_run_local_lists_task_skills_in_the_prompt(tmp_path):
 
 
 def test_cli_returns_partial_json_after_exhausting_request_retries(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"model_retry": {"max_attempts": 3, "base_backoff_seconds": 0}}))
     with model_server([(500, {"error": {"message": "test failure", "type": "server_error"}})] * 3) as (
         url,
         requests,
     ):
-        completed = cli(tmp_path, "--model", "test", "--base-url", url, "Do the task")
+        completed = cli(
+            tmp_path, "--config", str(config), "--model", "test", "--base-url", url, "Do the task"
+        )
     assert completed.returncode == 1
     result = json.loads(completed.stdout)
     assert result["stop_reason"] == "failed"
@@ -239,6 +260,16 @@ def test_cli_rejects_invalid_config_before_workspace_setup(tmp_path):
     completed = cli(tmp_path, "--config", str(config), "Do the task")
     assert completed.returncode == 1
     assert "unknown_option" in completed.stderr
+    assert not (tmp_path / ".agents").exists()
+
+
+def test_cli_web_tools_require_exa_key_before_workspace_setup(tmp_path, monkeypatch):
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"model": "test", "enable_web_tools": True}))
+    completed = cli(tmp_path, "--config", str(config), "Do the task")
+    assert completed.returncode == 1
+    assert "EXA_API_KEY is required" in completed.stderr
     assert not (tmp_path / ".agents").exists()
 
 

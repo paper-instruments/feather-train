@@ -19,6 +19,7 @@ from feather_train.sandbox.compose import (
     prepare_compose_grading,
     resume_compose_stack,
 )
+from feather_train.tasks.harbor_spec import ArtifactSpec, CollectHook
 
 
 class BakedWorld:
@@ -60,6 +61,10 @@ class BakedWorld:
             output = "\n".join(f"PORT_{port}_READY" for port in self.ports.values())
         elif command.startswith("docker container ls"):
             output = "verifier\n" if self.verifier else ""
+        elif "ps -q world" in command:
+            output = "world-container-id"
+        elif "Config.Image" in command:
+            output = "task-image:v1"
         elif command.startswith("docker inspect"):
             state = self.agent if command.endswith(" agent") else self.verifier
             return SimpleNamespace(
@@ -79,7 +84,8 @@ async def resume(world, servers=()):
     )
 
 
-async def test_resume_rewrites_mcp_origin_preserving_endpoint_and_query():
+@pytest.mark.parametrize("request_timeout_seconds", [0, 60, 120.5])
+async def test_resume_rewrites_mcp_origin_preserving_endpoint_and_query(request_timeout_seconds):
     world = BakedWorld(
         {
             "services": {
@@ -96,6 +102,9 @@ async def test_resume_rewrites_mcp_origin_preserving_endpoint_and_query():
                 "name": "mail",
                 "transport": "streamable-http",
                 "url": "http://mail:5000/api/mcp?tenant=test",
+                "request_timeout_seconds": request_timeout_seconds,
+                "headers": {"Authorization": "Bearer test"},
+                "raise_on_error_result": True,
             }
         ],
     )
@@ -105,6 +114,9 @@ async def test_resume_rewrites_mcp_origin_preserving_endpoint_and_query():
                 name="mail",
                 transport="streamable-http",
                 url="https://sandbox-5003.example.test/api/mcp?tenant=test",
+                request_timeout_seconds=request_timeout_seconds,
+                headers={"Authorization": "Bearer test"},
+                raise_on_error_result=True,
             )
         ],
         None,
@@ -184,6 +196,79 @@ async def test_grading_removes_agent_before_attaching_private_json_state():
     assert 'docker network connect "$state_network" verifier' in private_state
     assert "docker exec -i verifier" in private_state
     assert "network connect" not in stop
+
+
+async def test_shared_grading_keeps_the_agent_container():
+    world = BakedWorld()
+    await prepare_compose_grading(world, None, environment_mode="shared")
+    joined = "\n".join(world.commands)
+    assert not any("stop main" in command for command in world.commands)
+    assert "docker exec -u root agent mkdir -p /opt/apex_grader_tests" in joined
+    assert "docker cp /opt/apex_grader_tests/. agent:/opt/apex_grader_tests/" in joined
+
+
+async def test_resume_skips_verifier_when_not_required():
+    world = BakedWorld(verifier="")
+    await resume_compose_stack(world, mcp_servers=[], require_verifier=False)
+    assert not any("verifier" in command and "inspect" in command for command in world.commands)
+
+
+async def test_separate_grading_collects_then_refreshes_verifier_from_tests_image():
+    world = BakedWorld()
+    await prepare_compose_grading(
+        world,
+        None,
+        environment_mode="separate",
+        collect_hooks=(CollectHook(command="git diff --binary HEAD", timeout_sec=300),),
+        artifacts=("/logs/artifacts/model.patch",),
+    )
+    joined = "\n".join(world.commands)
+    assert "docker exec -u root agent /bin/bash -lc" in joined
+    assert "git diff --binary HEAD" in joined
+    assert "docker cp agent:/logs/artifacts/model.patch" in joined
+    assert "test -f /opt/apex_grader_tests/Dockerfile" in joined
+    assert "docker image inspect feather-separate-verifier" in joined
+    assert "stop main" in joined and "rm -f main" in joined
+    assert "docker build -t feather-separate-verifier" not in joined
+    assert "docker rm -f verifier" in joined
+    assert "docker run -d --name verifier --entrypoint sleep feather-separate-verifier infinity" in joined
+    assert "docker cp /opt/apex_grader_tests/. verifier:/opt/apex_grader_tests/" in joined
+    assert "docker cp /tmp/feather-separate-artifacts/model.patch verifier:/logs/artifacts/model.patch" in joined
+
+
+async def test_separate_grading_without_collect_hook_copies_agent_artifact():
+    world = BakedWorld()
+    await prepare_compose_grading(
+        world,
+        None,
+        environment_mode="separate",
+        artifacts=("/logs/agent/trajectory.json",),
+    )
+    joined = "\n".join(world.commands)
+    assert "docker cp agent:/logs/agent/trajectory.json" in joined
+    assert "docker exec -u root agent /bin/bash -lc" not in joined
+    assert "docker cp /tmp/feather-separate-artifacts/trajectory.json verifier:/logs/agent/trajectory.json" in joined
+
+
+async def test_separate_grading_collects_world_artifact_from_world_service():
+    world = BakedWorld()
+    await prepare_compose_grading(
+        world,
+        None,
+        environment_mode="separate",
+        collect_hooks=(
+            CollectHook(command="python /app/tools/collect_world_snapshot.py", timeout_sec=660, service="world"),
+        ),
+        artifacts=(
+            "/logs/agent/trajectory.json",
+            ArtifactSpec(source="/logs/world/final_snapshot.tar.gz", service="world"),
+        ),
+    )
+    joined = "\n".join(world.commands)
+    assert "ps -q world" in joined
+    assert "docker exec -u root world-container-id /bin/bash -lc" in joined
+    assert "docker cp world-container-id:/logs/world/final_snapshot.tar.gz" in joined
+    assert "docker cp /tmp/feather-separate-artifacts/final_snapshot.tar.gz verifier:/logs/world/final_snapshot.tar.gz" in joined
 
 
 async def test_grading_without_private_state_does_not_attach_networks():

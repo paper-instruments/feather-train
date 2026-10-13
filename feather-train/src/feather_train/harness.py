@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Literal, Self
 
@@ -14,13 +16,15 @@ from feather_harness.core.compaction import CompactionConfig
 from feather_harness.core.messages import AssistantMessage, SystemMessage
 from feather_harness.core.model import ChatCompletionsModel, ModelSettings
 from feather_harness.core.runner import AgentRunError, RunResult
+from feather_harness.core.token_budget import PromptTokenBudget
 from feather_harness.production import Profile
 from feather_harness.tools.web import WEB_TOOL_NAMES
 from feather_harness.tools.web.exa import ExaConfigurationError, ExaWebProvider
 from openai import AsyncOpenAI
-from pydantic import Field, FilePath, JsonValue, model_validator
+from pydantic import Field, FilePath, JsonValue, field_validator, model_validator
 
 from feather_train.agent import DEFAULT_TOOLS, ToolMetrics, run_e2b, validate_tool_selection
+from feather_train.deliverable_capture import capture_deliverables
 from feather_train.errors import NON_RETRYABLE_CAUSES, NonRetryableHarnessError
 from feather_train.grading.grader import (
     GradingConfig,
@@ -45,26 +49,41 @@ from feather_train.observability.payloads import (
     build_braintrust_rollout_start,
 )
 from feather_train.sandbox.lifecycle import ComposeSandbox
+from feather_train.sandbox.paths import WORKSPACE_DIR
 from feather_train.sandbox.runtime import build_runtime, install_runtime
 from feather_train.sandbox.transport import E2BRuntime
+from feather_train.tasks.harbor_spec import ArtifactSpec
 from feather_train.tasks.paths import is_safe_task_id
 
 logger = logging.getLogger(__name__)
+_DOMAIN = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}")
 
 
 class FeatherHarnessConfig(vf.HarnessConfig):
     id: Literal["feather_train"] = "feather_train"
     profile: Profile = "train"
+    prompt_token_budget: PromptTokenBudget | None = None
+    additional_instructions: str | None = None
+    capture_deliverables: bool = False
+    capture_paths: tuple[str, ...] = ()
+    capture_output_dir: str = "outputs/deliverables"
+    capture_volume_name: str | None = None
     enable_image_tools: bool = False
+    # Defaults to enable_image_tools; false keeps MCP images while read stays text-only.
+    enable_image_reads: bool | None = None
     max_turns: int = Field(default=250, ge=1)
     sandbox_timeout_minutes: int = Field(default=180, gt=0)
     sandbox_start_max_attempts: int = Field(default=3, ge=1)
     generation_timeout_seconds: float = Field(default=600, gt=0)
-    # Evaluation-only: wait out endpoint outages in place. Unset keeps training's behavior.
+    model_request_retries: int = Field(default=2, ge=0)
+    # Evaluation-only waiting through outages while preserving the active rollout.
     model_retry: ModelRetryConfig | None = None
     runtime_archive: FilePath | None = None
     compaction: CompactionConfig = CompactionConfig(enabled=True)
     tools: tuple[str, ...] = DEFAULT_TOOLS
+    # Each domain also blocks its subdomains, for the solver's container only.
+    blocked_egress_domains: tuple[str, ...] = ()
+    blocked_web_content_markers: tuple[str, ...] = ()
     grading: GradingConfig = GradingConfig()
     trajectory_reward: TrajectoryRewardConfig = TrajectoryRewardConfig()
     enable_braintrust: bool = True
@@ -72,14 +91,45 @@ class FeatherHarnessConfig(vf.HarnessConfig):
     bt_experiment_name: str | None = None
     bt_experiment_metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
+    @field_validator("blocked_egress_domains")
+    @classmethod
+    def valid_domains(cls, domains: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(dict.fromkeys(domain.lower().rstrip(".") for domain in domains))
+        invalid = [domain for domain in normalized if not _DOMAIN.fullmatch(domain)]
+        if invalid:
+            raise ValueError(f"blocked_egress_domains must be DNS names, got {invalid}")
+        return normalized
+
+    @field_validator("blocked_web_content_markers")
+    @classmethod
+    def valid_web_content_markers(cls, markers: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(dict.fromkeys(marker.strip().casefold() for marker in markers))
+        if any(not marker for marker in normalized):
+            raise ValueError("blocked_web_content_markers must contain nonempty strings")
+        return normalized
+
     @model_validator(mode="after")
     def supported_tools(self) -> Self:
         validate_tool_selection(self.tools)
+        if self.enable_image_reads and not self.enable_image_tools:
+            raise ValueError("enable_image_reads requires enable_image_tools")
+        if self.capture_deliverables and not self.capture_paths:
+            raise ValueError("capture_deliverables requires explicit capture_paths")
+        for path in self.capture_paths:
+            root = PurePosixPath(path)
+            if (
+                not root.is_absolute()
+                or ".." in root.parts
+                or root.parts[:2] != ("/", "filesystem")
+                or any(part in {".agents", ".feather"} for part in root.parts)
+            ):
+                raise ValueError("capture_paths must stay under /filesystem outside runtime directories")
+        if not self.capture_output_dir.strip():
+            raise ValueError("capture_output_dir must not be empty")
         return self
 
     def tools_for_task(self, *, requires_web_search: bool) -> tuple[str, ...]:
-        excluded = WEB_TOOL_NAMES if self.enable_image_tools else (*WEB_TOOL_NAMES, "view_image")
-        tools = tuple(name for name in self.tools if name not in excluded)
+        tools = tuple(name for name in self.tools if name not in WEB_TOOL_NAMES)
         return (*tools, *WEB_TOOL_NAMES) if requires_web_search else tools
 
 
@@ -194,10 +244,20 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
         secret: str,
     ) -> vf.ProgramResult:
         model = ctx.model
+        if self.config.capture_deliverables and (
+            task.source != "benchmark"
+            or not task.eval_run_id
+            or not all(is_safe_task_id(value) for value in (task.eval_run_id, task.task_id, trace.id))
+        ):
+            raise NonRetryableHarnessError("Deliverable capture requires benchmark eval run/task/trace identities")
         tools = self.config.tools_for_task(requires_web_search=task.requires_web_search)
         try:
             web_provider = (
-                ExaWebProvider(api_key=os.environ.get("EXA_API_KEY", ""))
+                ExaWebProvider(
+                    api_key=os.environ.get("EXA_API_KEY", ""),
+                    blocked_domains=self.config.blocked_egress_domains,
+                    blocked_content_markers=self.config.blocked_web_content_markers,
+                )
                 if task.requires_web_search
                 else None
             )
@@ -225,6 +285,14 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
             {
                 "profile": self.config.profile,
                 "sampling_args": ctx.sampling.model_dump(exclude_none=True),
+                "blocked_egress_domains": list(self.config.blocked_egress_domains),
+                "web_research_policy": {
+                    "enabled": web_provider is not None,
+                    "blocked_domains": list(web_provider.blocked_domains) if web_provider else [],
+                    "blocked_content_markers": (
+                        list(web_provider.blocked_content_markers) if web_provider else []
+                    ),
+                },
             }
         )
         for key, value in [
@@ -234,8 +302,8 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
         ]:
             if value is not None:
                 trace.info[key] = value
-        if not is_safe_task_id(task.world_id) or not is_safe_task_id(trace.id):
-            raise NonRetryableHarnessError("Invalid world or trace identifier for run directory")
+        if not is_safe_task_id(trace.id):
+            raise NonRetryableHarnessError("Invalid trace identifier for run directory")
         phase = "sandbox_start"
         metrics = ToolMetrics()
         try:
@@ -243,6 +311,7 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
                 task,
                 timeout=self.config.sandbox_timeout_minutes * 60,
                 max_attempts=self.config.sandbox_start_max_attempts,
+                blocked_egress_domains=self.config.blocked_egress_domains,
             ) as world:
                 trace.info["sandbox_id"] = world.sandbox.sandbox_id
                 rollout.add_metadata(
@@ -254,7 +323,10 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
                 )
                 phase = "runtime_install"
                 await install_runtime(
-                    world.sandbox, self._runtime_archive, profile=self.config.profile
+                    world.sandbox,
+                    self._runtime_archive,
+                    workspace=task.workdir or WORKSPACE_DIR,
+                    profile=self.config.profile,
                 )
                 servers = []
                 for server in world.runtime.mcp_servers:
@@ -267,22 +339,26 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
                         if task.submission_transport == "submit_tool":
                             server = server.model_copy(update={"raise_on_error_result": True})
                     servers.append(server)
-                logs = f"/app/.feather/projects/{task.world_id}/sessions/{trace.id}/tasks"
+                # The agent sees this path in shell output, so it must not name the benchmark.
+                logs = f"/app/.feather/sessions/{trace.id}/tasks"
+                workspace = task.workdir or WORKSPACE_DIR
                 transport = E2BRuntime(
                     world.sandbox,
+                    workspace=workspace,
                     log_directory=logs,
-                    write_grants=("/task", logs.rsplit("/", 1)[0]),
+                    write_grants=(workspace, "/task", logs.rsplit("/", 1)[0]),
                 )
                 phase = "agent"
                 agent_model = retrying_model = None
                 async with AsyncOpenAI(
                     base_url=endpoint,
                     api_key=secret,
-                    max_retries=2,
+                    max_retries=self.config.model_request_retries,
                     timeout=self.config.generation_timeout_seconds,
                 ) as client:
                     agent_model = ChatCompletionsModel(
-                        client=rollout.wrap_openai(client), model=model
+                        client=rollout.wrap_openai(client), model=model,
+                        prompt_token_budget=self.config.prompt_token_budget
                     )
                     if self.config.model_retry is not None:
                         agent_model = retrying_model = RetryingModel(
@@ -292,11 +368,13 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
                         result = await run_e2b(
                             prompt[0].content,
                             instructions=task.system_prompt,
+                            additional_instructions=self.config.additional_instructions,
                             model=agent_model,
                             transport=transport,
                             max_turns=self.config.max_turns,
                             model_settings=_model_settings_from_sampling(ctx.sampling),
                             enable_image_tools=self.config.enable_image_tools,
+                            enable_image_reads=self.config.enable_image_reads,
                             profile=self.config.profile,
                             compaction=self.config.compaction,
                             mcp_servers=tuple(servers),
@@ -338,6 +416,11 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
                 rollout.record_agent_result(
                     final_answer=result.final_answer, num_turns=result.num_turns
                 )
+                usage = result.usage()
+                rollout.record_usage(usage)
+                # doteval stores trace.info; the proxy's own usage omits BYOK upstream cost.
+                trace.info["model_usage"] = usage.model_dump(mode="json", exclude_none=True)
+                trace.info["model_usage_calls"] = _usage_calls(result)
                 rollout.add_metadata(
                     {
                         "compactions": result.compactions,
@@ -347,12 +430,43 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
                         "agent_stop_message": result.stop_message,
                     }
                 )
+                if self.config.capture_deliverables:
+                    phase = "deliverable_capture"
+                    with rollout.child_span(name="deliverable_capture", type="task") as span:
+                        capture = await capture_deliverables(
+                            world,
+                            task,
+                            trace_id=trace.id,
+                            final_answer=result.final_answer,
+                            model=model,
+                            sampling=ctx.sampling.model_dump(exclude_none=True),
+                            config=self.config,
+                        )
+                        trace.info["deliverable_capture"] = capture
+                        rollout.add_metadata({"deliverable_capture": capture})
+                        span.log(output=capture)
                 evidence = None
                 if self.config.grading.stage_agent_trace:
                     evidence = AgentEvidence(
                         model=model, instructions=_agent_system_instructions(result), trace=result
                     )
                 phase = "grading_isolation"
+                if evidence is not None and _needs_agent_trajectory_artifact(task):
+                    await world.stage_agent_trace(
+                        (
+                            json.dumps(
+                                {
+                                    **evidence.as_dict(),
+                                    "task_id": task.task_id,
+                                    "final_response": result.final_answer,
+                                },
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
                 verifier = await world.prepare_grading(task)
                 phase = "grading"
                 with rollout.child_span(name="judge", type="score", set_current=True) as span:
@@ -404,6 +518,11 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
                     stop_message=str(exc),
                     tool_metrics={"tool_error_schema_invalid": metrics.invalid_calls},
                 )
+                usage = exc.result.usage()
+                rollout.record_usage(usage)
+                # doteval stores trace.info; the proxy's own usage omits BYOK upstream cost.
+                trace.info["model_usage"] = usage.model_dump(mode="json", exclude_none=True)
+                trace.info["model_usage_calls"] = _usage_calls(exc.result)
                 retryable = not isinstance(exc.cause, NON_RETRYABLE_CAUSES)
             elif isinstance(exc, HarborGradingError):
                 rollout.record_grading_failed(
@@ -433,6 +552,12 @@ def _model_settings_from_sampling(sampling: vf.Sampling) -> ModelSettings:
     return ModelSettings(**direct, extra_body={**extra_body, **args})
 
 
+def _usage_calls(result: RunResult) -> list[dict]:
+    """Per-call billed usage in call order, numbered across compactions."""
+    calls = [call for segment in result.segments for call in segment.calls]
+    return [{"call": number, **call.accounting_row()} for number, call in enumerate(calls)]
+
+
 def _agent_system_instructions(result: RunResult) -> str:
     """Preserve the exact system message sent to the policy in grader evidence."""
     for segment in result.segments:
@@ -440,3 +565,16 @@ def _agent_system_instructions(result: RunResult) -> str:
             if isinstance(message, SystemMessage):
                 return message.content
     raise ValueError("Agent trace is missing the model-visible system instructions")
+
+
+def _needs_agent_trajectory_artifact(task: vf.TaskData) -> bool:
+    if task.environment_mode != "separate":
+        return False
+    return any(
+        artifact == "/logs/agent/trajectory.json"
+        if isinstance(artifact, str)
+        else isinstance(artifact, ArtifactSpec)
+        and artifact.source == "/logs/agent/trajectory.json"
+        and artifact.service in {"main", "agent"}
+        for artifact in task.artifacts
+    )

@@ -55,7 +55,7 @@ Quote supplied text of more than a line as a block indented on both sides, witho
 
 ### Visual review
 
-When pagination or layout matters and rendering is available, view the affected pages for a scoped edit. For a new or globally changed document, review a page overview, then inspect detail where it matters at a readable resolution. If the DOCX and an exported PDF are both deliverables, check both. When the user gave a length, count the rendered pages before finishing, and if the document runs over, cut repetition and nonessential content rather than shrinking type or margins.
+When pagination or layout matters and rendering is available, view the affected pages for a scoped edit. For a new or globally changed document, review a page overview, then inspect detail where it matters at a readable resolution. If the DOCX and an exported PDF are both deliverables, check both. When the user gave a length, count the rendered pages before finishing, and if the document runs over, cut repetition and nonessential content rather than shrinking type or margins. Render pages as the pdf skill describes.
 
 ### Examples
 

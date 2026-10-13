@@ -34,7 +34,7 @@ def edit(payload):
     display = target.display
     validate_write_extension(Path(display), display)
     expected = require_current_read(args["revisions"], display)
-    content, encoding, revision = load_text(target.path, display, target.metadata)
+    content, encoding, revision = load_text(target.path, display, target.metadata, scope="edits text files")
     check_revision(display, expected, revision)
     occurrences = _find_occurrences(content, old_string)
     first = next(occurrences, None)

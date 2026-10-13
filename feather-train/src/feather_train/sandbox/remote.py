@@ -94,9 +94,9 @@ async def run(path: Path, payload: str | None = None) -> None:
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        # view_image accepts 10 MiB of bytes; allow base64 expansion plus its JSON envelope.
+        # Image reads return up to 5 MB of base64; leave room for the JSON envelope.
         # Other tools keep the existing bound on supervisor protocol lines.
-        limit=16 * 1024 * 1024 if request.get("name") == "view_image" else 1_000_000,
+        limit=16 * 1024 * 1024 if request.get("name") == "read" else 1_000_000,
     )
 
     async def errors() -> str:

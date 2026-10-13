@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import sys
@@ -21,6 +22,7 @@ from feather_harness import (
 from feather_harness.cli import LocalConfig
 from feather_harness.subagents import AGENT_TOOL_NAMES, CHILD_GUIDANCE, PARENT_GUIDANCE
 from tests.local.test_cli import response
+from tests.local.test_profiles import _WebProvider
 
 
 async def test_subagents_require_explicit_production_opt_in_before_workspace_setup(
@@ -114,6 +116,48 @@ async def test_children_run_shell_commands_concurrently_with_private_prompts_and
         saved = RunResult.model_validate_json((directory / "run-1.json").read_text())
         assert saved.final_answer == status["answer"]
         assert list((directory / "tasks").rglob("*.log"))
+
+
+async def test_delegation_inherits_additional_guidance_and_web_provider_and_hashes_parent_prompt(
+    tmp_path: Path,
+) -> None:
+    requests: dict[str, list[dict]] = {"parent": [], "child": []}
+    provider = _WebProvider()
+    metadata_path = tmp_path / "logs/eval-prompt.json"
+
+    def respond(payload: dict) -> dict:
+        prompt = _first_prompt(payload)
+        requests[prompt].append(payload)
+        if prompt == "parent":
+            if len(requests[prompt]) == 1:
+                return response(tools=[("spawn_agent", {"prompt": "child"})])
+            return _wait_or_finish(payload, "Research completed.")
+        if len(requests[prompt]) == 1:
+            return response(tools=[("web_search", {"query": "annual filing"})])
+        assert "https://example.com/filing" in _last_outputs(payload)[0]
+        return response("Child research completed.")
+
+    async with _model(respond) as model:
+        result = await run_local(
+            "parent", model=model, workspace=tmp_path, subagents=SubagentConfig(),
+            additional_instructions="Use records in {{ workspace }}.",
+            eval_prompt_output=metadata_path, web_provider=provider,
+        )
+
+    assert result.final_answer == "Research completed."
+    assert provider.queries == ["annual filing"]
+    for prompt in ("parent", "child"):
+        payload = requests[prompt][0]
+        instructions = payload["messages"][0]["content"]
+        assert instructions.count(f"Use records in {tmp_path}.") == 1
+        assert {"web_search", "web_fetch"} <= {
+            tool["function"]["name"] for tool in payload["tools"]
+        }
+    parent_instructions = requests["parent"][0]["messages"][0]["content"]
+    assert json.loads(metadata_path.read_text()) == {
+        "profile": "prod",
+        "system_prompt_sha256": hashlib.sha256(parent_instructions.encode()).hexdigest(),
+    }
 
 
 async def test_exhausted_child_exposes_its_saved_trace_without_an_extra_turn(tmp_path: Path) -> None:

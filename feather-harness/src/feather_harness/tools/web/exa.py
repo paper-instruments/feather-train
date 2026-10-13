@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import re
-from collections.abc import Callable
+import unicodedata
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from tenacity import (
@@ -34,6 +37,8 @@ _TIMEOUT = httpx.Timeout(_REQUEST_TIMEOUT_SECONDS, connect=5.0)
 _TRANSIENT_STATUS_CODES = frozenset({408, 409, 425, 429})
 _SAFE_TAG = re.compile(r"[A-Z0-9_]{1,64}\Z")
 _SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
+_CRAWL_HTTP_STATUS = re.compile(r"CRAWL_HTTP_[1-5][0-9]{2}")
+_DOMAIN = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}")
 
 
 class ExaConfigurationError(ValueError):
@@ -71,30 +76,45 @@ class ExaWebProvider:
         default=None,
         repr=False,
     )
+    blocked_domains: tuple[str, ...] = ()
+    blocked_content_markers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not 1 <= len(self.api_key) <= 512 or any(
             not 0x21 <= ord(character) <= 0x7E for character in self.api_key
         ):
             raise ExaConfigurationError("EXA_API_KEY is required when a web tool is enabled")
+        object.__setattr__(
+            self, "blocked_domains", tuple(dict.fromkeys(_normalize_domain(d) for d in self.blocked_domains))
+        )
+        object.__setattr__(
+            self,
+            "blocked_content_markers",
+            tuple(dict.fromkeys(_normalize_marker(m) for m in self.blocked_content_markers)),
+        )
 
     @_retry_exa
     async def search(self, query: str, *, limit: int) -> list[WebSearchResult]:
+        payload = {
+            "query": query,
+            "type": "auto",
+            "numResults": limit,
+            "contents": {
+                "highlights": {"maxCharacters": _MAX_HIGHLIGHT_CHARS},
+                "livecrawlTimeout": _LIVECRAWL_TIMEOUT_MILLISECONDS,
+            },
+        }
+        if self.blocked_domains:
+            payload["excludeDomains"] = list(self.blocked_domains)
         body = await self._request(
             "search",
-            payload={
-                "query": query,
-                "type": "auto",
-                "numResults": limit,
-                "contents": {
-                    "highlights": {
-                        "maxCharacters": _MAX_HIGHLIGHT_CHARS,
-                    },
-                    "livecrawlTimeout": _LIVECRAWL_TIMEOUT_MILLISECONDS,
-                },
-            },
+            payload=payload,
         )
-        return _parse_search_results(body, limit=limit)
+        return _parse_search_results(
+            body, limit=limit,
+            blocked_domains=self.blocked_domains,
+            blocked_content_markers=self.blocked_content_markers,
+        )
 
     async def fetch(
         self,
@@ -104,6 +124,10 @@ class ExaWebProvider:
     ) -> WebFetchResult | WebFetchUnavailable:
         if not 1 <= max_characters <= _MAX_CONTENT_CHARS:
             raise ValueError(f"Exa content limit must be between 1 and {_MAX_CONTENT_CHARS}")
+        if _is_blocked_source(
+            {"url": url}, self.blocked_domains, self.blocked_content_markers
+        ):
+            return WebFetchUnavailable(reason="not_available")
 
         try:
             return await self._fetch(url, max_characters=max_characters)
@@ -129,6 +153,8 @@ class ExaWebProvider:
             body,
             requested_url=url,
             max_characters=max_characters,
+            blocked_domains=self.blocked_domains,
+            blocked_content_markers=self.blocked_content_markers,
         )
 
     async def _request(
@@ -239,7 +265,11 @@ def _safe_value(value: object, *, pattern: re.Pattern[str]) -> str | None:
     return None
 
 
-def _parse_search_results(body: bytes, *, limit: int) -> list[WebSearchResult]:
+def _parse_search_results(
+    body: bytes, *, limit: int,
+    blocked_domains: tuple[str, ...] = (),
+    blocked_content_markers: tuple[str, ...] = (),
+) -> list[WebSearchResult]:
     try:
         payload = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -253,6 +283,7 @@ def _parse_search_results(body: bytes, *, limit: int) -> list[WebSearchResult]:
     return [
         _parse_search_result(raw_result, index=index)
         for index, raw_result in enumerate(raw_results)
+        if not _is_blocked_source(raw_result, blocked_domains, blocked_content_markers)
     ]
 
 
@@ -294,6 +325,8 @@ def _parse_fetch_result(
     *,
     requested_url: str,
     max_characters: int,
+    blocked_domains: tuple[str, ...] = (),
+    blocked_content_markers: tuple[str, ...] = (),
 ) -> WebFetchResult | WebFetchUnavailable:
     try:
         payload = json.loads(body)
@@ -328,6 +361,8 @@ def _parse_fetch_result(
         raise ExaResponseError("Exa contents result was not an object")
     if raw_result.get("id") != requested_url:
         raise ExaResponseError("Exa contents result contained an invalid ID")
+    if _is_blocked_source(raw_result, blocked_domains, blocked_content_markers):
+        return WebFetchUnavailable(reason="not_available")
     resolved_url = raw_result.get("url")
     title = raw_result.get("title")
     content = raw_result.get("text")
@@ -349,6 +384,67 @@ def _parse_fetch_result(
         raise ExaResponseError(f"Exa contents result was invalid: {exc}") from exc
 
 
+def _normalize_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    while True:
+        decoded = html.unescape(unquote(normalized))
+        if decoded == normalized:
+            return decoded
+        normalized = unicodedata.normalize("NFKC", decoded).casefold()
+
+
+def _normalize_domain(domain: str) -> str:
+    if not isinstance(domain, str):
+        raise ExaConfigurationError("blocked_domains must contain DNS names")
+    try:
+        normalized = _normalize_text(domain).strip().rstrip(".").encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ExaConfigurationError("blocked_domains must contain DNS names") from exc
+    if not _DOMAIN.fullmatch(normalized):
+        raise ExaConfigurationError("blocked_domains must contain DNS names")
+    return normalized
+
+
+def _normalize_marker(marker: str) -> str:
+    if not isinstance(marker, str) or not (normalized := _normalize_text(marker).strip()):
+        raise ExaConfigurationError("blocked_content_markers must contain nonempty strings")
+    return normalized
+
+
+def _is_blocked_source(
+    source: object, domains: tuple[str, ...], markers: tuple[str, ...]
+) -> bool:
+    if not isinstance(source, dict) or not (domains or markers):
+        return False
+    url = source.get("url")
+    if domains and isinstance(url, str):
+        try:
+            host = urlsplit(_normalize_text(url)).hostname or ""
+            host = host.rstrip(".").encode("idna").decode("ascii")
+        except (ValueError, UnicodeError):
+            host = ""
+        if any(host == domain or host.endswith("." + domain) for domain in domains):
+            return True
+    # Inspect the complete provider result before snippets or extracted text are bounded.
+    if markers:
+        for text in _source_strings(source):
+            normalized = _normalize_text(text)
+            if any(marker in normalized for marker in markers):
+                return True
+    return False
+
+
+def _source_strings(value: object) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _source_strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _source_strings(child)
+
+
 def _parse_fetch_unavailable(status: dict[str, object]) -> WebFetchUnavailable:
     error = status.get("error")
     if not isinstance(error, dict):
@@ -363,6 +459,10 @@ def _parse_fetch_unavailable(status: dict[str, object]) -> WebFetchUnavailable:
     }
     if tag in reasons:
         return WebFetchUnavailable(reason=reasons[tag])
+    # The source site refused or failed Exa's crawler (403 paywalls, 5xx): an ordinary
+    # unavailable source the model can work around, never a reason to abort the run.
+    if tag and _CRAWL_HTTP_STATUS.fullmatch(tag):
+        return WebFetchUnavailable(reason="not_found" if tag == "CRAWL_HTTP_404" else "not_available")
     if tag in {
         "CRAWL_TIMEOUT",
         "CRAWL_LIVECRAWL_TIMEOUT",

@@ -221,7 +221,10 @@ async def test_failed_compaction_closes_spans_without_opening_another_window(fai
                 task.cancel()
             with pytest.raises(asyncio.CancelledError if failure == "cancelled" else AgentRunError):
                 await task
-        assert [span.name for span in root.children] == ["context_window_1", "compaction_1"]
+        attempts = 4 if failure == "empty_summary" else 1
+        assert [span.name for span in root.children] == [
+            "context_window_1", *(["compaction_1"] * attempts)
+        ]
         assert all(span.closed for span in root.children)
         assert current_span.get() is root
     finally:

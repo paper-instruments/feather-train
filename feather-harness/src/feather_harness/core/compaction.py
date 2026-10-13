@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .messages import (
     AssistantMessage,
@@ -33,13 +33,28 @@ SUMMARY_RETURN_INSTRUCTION = "Return only the compact continuation summary."
 
 class CompactionConfig(FrozenModel):
     enabled: bool = False
+    max_tokens: int = Field(default=65536, gt=0)
     context_window_tokens: int = Field(default=131072, gt=30000)
     min_turns_before_compaction: int = Field(default=0, ge=0)
     keep_recent_turns: int = Field(default=2, ge=0)
+    # Off keeps the original estimate, which counts hidden reasoning as context and so
+    # compacts early for models that think at length without returning their reasoning.
+    exclude_unreplayed_reasoning: bool = False
+    # Explicit trigger for models whose vendor harness compacts at a known point (e.g. Codex's
+    # 90% of 272k for GPT Sol); None keeps the window-derived default.
+    trigger_tokens: int | None = Field(default=None, gt=0)
     prompt: str = DEFAULT_COMPACTION_PROMPT
+
+    @model_validator(mode="after")
+    def _trigger_fits_window(self) -> CompactionConfig:
+        if self.trigger_tokens is not None and self.trigger_tokens >= self.context_window_tokens:
+            raise ValueError("trigger_tokens must be below context_window_tokens")
+        return self
 
     @property
     def threshold_tokens(self) -> int:
+        if self.trigger_tokens is not None:
+            return self.trigger_tokens
         return min(self.context_window_tokens * 85 // 100, self.context_window_tokens - 30000)
 
 

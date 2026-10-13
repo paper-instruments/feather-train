@@ -14,12 +14,10 @@ from feather_harness import ChatCompletionsModel, run_local
 from feather_harness.core.compaction import DEFAULT_COMPACTION_PROMPT, CompactionConfig
 from feather_harness.local.filesystem import LocalFileRuntime
 from feather_harness.production import (
-    HOST_FACTS,
     PRODUCTION_COMPACTION_PROMPT,
     PRODUCTION_PROMPT,
     PRODUCTION_TOOL_DESCRIPTIONS,
     VISION_DISABLED_FACT,
-    VISION_ENABLED_FACT,
     build_production_instructions,
 )
 from feather_harness.prompt import RESOURCE_ROOT, build_instructions
@@ -30,6 +28,8 @@ from feather_harness.scripts.install_skills import (
     install_skills,
 )
 from feather_harness.tools.files import FileTools
+from feather_harness.tools.web.fetch import WebFetchUnavailable
+from feather_harness.tools.web.search import WebSearchResult
 from tests.core.test_images import IMAGE, PNG
 from tests.local.test_cli import response
 
@@ -37,16 +37,16 @@ FORMATS = ("docx", "pdf", "pptx", "xlsx")
 
 
 @pytest.mark.parametrize(
-    "options, production, view_image, image_read",
+    "options, production, image_read",
     [
-        ({}, True, True, True),
-        ({"profile": "train"}, False, False, False),
-        ({"profile": "prod", "enable_image_tools": False}, True, False, False),
-        ({"profile": "train", "enable_image_tools": True}, False, True, False),
+        ({}, True, True),
+        ({"profile": "train"}, False, False),
+        ({"profile": "prod", "enable_image_tools": False}, True, False),
+        ({"profile": "train", "enable_image_tools": True}, False, True),
     ],
 )
 async def test_startup_profiles_and_image_overrides_reach_model_requests(
-    tmp_path: Path, options: dict, production: bool, view_image: bool, image_read: bool
+    tmp_path: Path, options: dict, production: bool, image_read: bool
 ) -> None:
     (tmp_path / "page.png").write_bytes(PNG)
     task = "Inspect page.png without changing the supplied task.\n"
@@ -60,16 +60,17 @@ async def test_startup_profiles_and_image_overrides_reach_model_requests(
     assert first["messages"][1] == {"role": "user", "content": task}
     if production:
         assert (RESOURCE_ROOT / "production_prompt.md").read_text().strip() in instructions
-        assert "## Host capabilities" in instructions
-        assert (VISION_ENABLED_FACT if view_image else VISION_DISABLED_FACT) in instructions
-        assert HOST_FACTS in instructions
+        assert "## Host capabilities" not in instructions
+        assert "headless" not in instructions
     else:
         assert instructions == build_instructions()
     tools = {tool["function"]["name"]: tool["function"] for tool in first["tools"]}
-    assert ("view_image" in tools) is view_image
-    assert ("supported image" in tools["read"]["description"]) is image_read
+    assert "view_image" not in tools
+    assert tools["read"]["description"].startswith(
+        "Read a text file or an image." if image_read else "Read a text file with line numbers."
+    )
     assert (
-        "supported image" in tools["read"]["parameters"]["properties"]["file_path"]["description"]
+        "text file or image" in tools["read"]["parameters"]["properties"]["file_path"]["description"]
     ) is image_read
     observation = next(message for message in requests[1]["messages"] if message["role"] == "tool")
     if image_read:
@@ -80,6 +81,42 @@ async def test_startup_profiles_and_image_overrides_reach_model_requests(
         assert observation["content"] == "Vision is not available in this environment."
         assert requests[1]["messages"][-1] == observation
     assert result.final_answer == "Finished."
+
+
+class _WebProvider:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def search(self, query: str, *, limit: int) -> list[WebSearchResult]:
+        self.queries.append(query)
+        return [WebSearchResult(title="Filing", url="https://example.com/filing")]
+
+    async def fetch(self, url: str, *, max_characters: int) -> WebFetchUnavailable:
+        return WebFetchUnavailable(reason="not_found")
+
+
+@pytest.mark.parametrize("profile", ["train", "prod"])
+async def test_web_tools_are_offered_only_with_a_provider(tmp_path: Path, profile: str) -> None:
+    async with _model(response("Finished.")) as (model, requests):
+        await run_local("Do the task", model=model, workspace=tmp_path, profile=profile)
+    assert not {"web_search", "web_fetch"} & {
+        tool["function"]["name"] for tool in requests[0]["tools"]
+    }
+
+    provider = _WebProvider()
+    async with _model(
+        response(tools=[("web_search", {"query": "annual filing"})]), response("Finished.")
+    ) as (model, requests):
+        await run_local(
+            "Do the task", model=model, workspace=tmp_path, profile=profile,
+            web_provider=provider,
+        )
+    assert {"web_search", "web_fetch"} <= {
+        tool["function"]["name"] for tool in requests[0]["tools"]
+    }
+    assert provider.queries == ["annual filing"]
+    observation = next(message for message in requests[1]["messages"] if message["role"] == "tool")
+    assert "https://example.com/filing" in observation["content"]
 
 
 async def test_profiles_change_prose_not_argument_contracts_or_text_invocation(

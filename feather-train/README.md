@@ -103,15 +103,38 @@ and does not apply the group length penalty.
 Set `sandbox_timeout_minutes` to match the training run's sandbox lifetime; it
 defaults to 180 minutes and is separate from the per-request model timeout.
 
-Native E2B evals launched through Train `eval.py` can set `env_args.profile: prod`;
-recipes that instantiate `FeatherHarnessConfig` can set `harness.profile: prod`.
+The standalone evaluation JSON accepts `profile: "prod"`; the training recipe
+accepts `harness.profile: "prod"`.
 This selects the standalone Feather production startup condition:
 professional prompt and tool guidance, production compaction continuation,
 response recovery, and the production skills and design assets in each task
 workspace. The default remains `train` for training and historical evals.
 `enable_image_tools` is independent and defaults to false; leave it false for a
 text-only comparison. Braintrust rollout metadata records the selected profile.
-The standalone `feather_train.eval` `EvalConfig` does not expose a profile selector.
+
+`EvalConfig` also accepts `additional_instructions` and `compaction`. Direct
+`load_environment` / `FeatherHarnessConfig` integrations additionally accept
+`prompt_token_budget`, `enable_image_reads`, `model_request_retries`,
+`blocked_egress_domains`, and `blocked_web_content_markers`. The default SDK retry
+count is two. The existing optional `model_retry` outage gate remains available to
+direct harness integrations; leaving it unset preserves the ordinary retry policy.
+
+For local evidence capture on benchmark tasks, set `capture_deliverables: true`
+and explicit `capture_paths`, for example `["/filesystem/deliverables"]`, in the
+evaluation JSON. Capture runs before grading removes the agent and saves an
+archive, final response, and manifest under the evaluation output directory.
+It rejects runtime/private roots, does not follow symlinks, and fails instead of
+silently truncating oversized outputs. Capture errors are recorded without
+changing the grading result. Local capture needs no Modal dependency. Direct
+harness integrations may opt into `capture_volume_name`; that mode requires the
+caller to install Modal and mount the corresponding output volume.
+
+Task worlds may declare Harbor shared or separate verifier modes, an absolute
+working directory, collection hooks, artifact sources, and a verifier deadline.
+They must already be baked with the corresponding images and tests. This package
+resumes prepared snapshots; it does not provide a snapshot-baking command.
+HTTP/SSE MCP descriptors preserve headers, response deadlines, and error policy
+when their endpoint is rewritten for the sandbox. See [grading](grading.md).
 
 ## Development checks
 

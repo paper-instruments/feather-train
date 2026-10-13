@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 
 import httpx
 import pytest
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 
 from feather_harness import (
     AgentRunError,
     ChatCompletionsModel,
     FeatherAgent,
+    RetryPolicy,
     RunRequest,
     Tool,
     ToolResult,
@@ -152,53 +154,14 @@ async def test_no_feedback_is_added_when_no_turn_remains():
 @pytest.mark.parametrize("finish", ["length", "error", "content_filter"])
 async def test_tool_calls_from_an_interrupted_response_never_run(finish):
     tool, calls = counting_tool()
-    completions = []
-
-    def complete_after_tools(message, results):
-        completions.append((message, results))
-        return True
-
     async with scripted(reply(finish=finish, tools=(("work", '{"path": "a"}'),))) as (
         model,
         requests,
     ):
-        result = await FeatherAgent(
-            model=model,
-            tools=(tool,),
-            response_recovery=True,
-            end_run_after_tools=complete_after_tools,
-        ).run(task())
+        result = await FeatherAgent(model=model, tools=(tool,), response_recovery=True).run(task())
     assert result.stop_reason == "ModelBehaviorError"
     assert result.stop_message.endswith("none of its tool calls were executed")
     assert (calls, len(requests), result.recoveries) == ([], 1, 0)
-    assert completions == []
-
-
-async def test_tool_completion_hook_can_finish_after_a_recovered_response():
-    tool, calls = counting_tool()
-    completions = []
-
-    def complete_after_tools(message, results):
-        completions.append((message.content, tuple(result.content for result in results)))
-        return True
-
-    async with scripted(
-        reply(None), reply("Submitted.", finish="tool_calls", tools=(("work", "{}"),))
-    ) as (model, requests):
-        result = await FeatherAgent(
-            model=model,
-            tools=(tool,),
-            response_recovery=True,
-            end_run_after_tools=complete_after_tools,
-        ).run(task())
-    assert (result.stop_reason, result.final_answer, result.recoveries) == (
-        "completed",
-        "Submitted.",
-        1,
-    )
-    assert calls == ["{}"]
-    assert completions == [("Submitted.", ("ok",))]
-    assert len(requests) == 2
 
 
 async def test_refusals_and_filtered_answers_are_never_coached():
@@ -223,8 +186,8 @@ async def test_recovery_off_keeps_empty_and_cut_off_answers_completed():
 
 
 @pytest.mark.parametrize("recovery", [False, True])
-async def test_interrupted_summary_never_replaces_context_in_production(recovery):
-    async with scripted(reply("Partial summ", finish="length"), reply("Done.")) as (
+async def test_interrupted_summary_never_replaces_context_after_retry_exhaustion(recovery):
+    async with scripted(*[reply("Partial summ", finish="length")] * 4, reply("Done.")) as (
         model,
         requests,
     ):
@@ -233,7 +196,85 @@ async def test_interrupted_summary_never_replaces_context_in_production(recovery
             with pytest.raises(AgentRunError, match="compaction summary is incomplete") as caught:
                 await agent.run(task())
             assert caught.value.result.segments[-1].kind == "compaction"
-            assert len(requests) == 1
+            assert len(requests) == 4
+            assert all(body == requests[0] for body in requests)
+            assert caught.value.result.compactions == 0
         else:
             result = await agent.run(task())
-            assert (result.final_answer, result.compactions) == ("Done.", 1)
+            assert (result.final_answer, result.compactions) == ("Partial summ", 1)
+
+
+@pytest.mark.parametrize("finish", ["length", "error"])
+async def test_production_retries_interrupted_summary_without_reusing_partial_text(finish):
+    async with scripted(
+        reply("partial", finish=finish), reply("valid summary"), reply("Done.")
+    ) as (model, requests):
+        result = await FeatherAgent(
+            model=model, compaction=TINY_WINDOW, response_recovery=True
+        ).run(task())
+
+    assert (result.final_answer, result.compactions, result.recoveries) == ("Done.", 1, 0)
+    assert requests[0] == requests[1]
+    assert "partial" not in json.dumps(requests[2])
+    assert [s.messages[0].content for s in result.segments if s.kind == "compaction"] == [
+        "partial", "valid summary"
+    ]
+
+
+@pytest.mark.parametrize("failure", [reply("filtered", finish="content_filter"), reply(refusal="No")])
+async def test_production_does_not_retry_filtered_or_refused_compaction(failure):
+    async with scripted(failure) as (model, requests):
+        with pytest.raises(AgentRunError, match="summary is incomplete"):
+            await FeatherAgent(
+                model=model, compaction=TINY_WINDOW, response_recovery=True
+            ).run(task())
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("status, attempts", [(400, 1), (503, 2)])
+async def test_compaction_does_not_multiply_model_transport_retries(status, attempts):
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(status, json={"error": {"message": "upstream failure"}})
+
+    async with AsyncOpenAI(
+        api_key="test", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        model = ChatCompletionsModel(
+            client=client, model="test",
+            retry=RetryPolicy(max_attempts=2, base_backoff_seconds=0),
+        )
+        with pytest.raises(AgentRunError) as caught:
+            await FeatherAgent(
+                model=model, compaction=TINY_WINDOW, response_recovery=True
+            ).run(task())
+    assert isinstance(caught.value.cause, APIStatusError)
+    assert caught.value.cause.status_code == status
+    assert len(requests) == attempts
+
+
+async def test_cancellation_interrupts_compaction_without_retrying():
+    started = asyncio.Event()
+    requests = []
+
+    async def respond(request):
+        requests.append(request)
+        started.set()
+        await asyncio.Future()
+
+    async with AsyncOpenAI(
+        api_key="test", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        model = ChatCompletionsModel(client=client, model="test", retry=RetryPolicy())
+        run = asyncio.create_task(
+            FeatherAgent(model=model, compaction=TINY_WINDOW, response_recovery=True).run(task())
+        )
+        await asyncio.wait_for(started.wait(), 2)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run, 2)
+    assert len(requests) == 1

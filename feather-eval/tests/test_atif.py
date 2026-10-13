@@ -269,7 +269,7 @@ def test_image_observations_keep_embedded_data_and_call_association():
     result = RunResult(
         stop_reason="completed", num_turns=2, compactions=0,
         segments=(TraceSegment(kind="execution", input=(UserMessage(content="inspect"),), messages=(
-            AssistantMessage(tool_calls=(ToolCall(id="image", name="view_image", arguments="{}"),)),
+            AssistantMessage(tool_calls=(ToolCall(id="image", name="read", arguments="{}"),)),
             ToolMessage(tool_call_id="image", content=[{"type": "image_url", "image_url": {"url": url}}]),
             AssistantMessage(content="answer"),
         )),),

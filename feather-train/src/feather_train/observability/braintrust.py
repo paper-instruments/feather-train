@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 import braintrust
 from feather_harness.core.messages import Message
-from feather_harness.core.model import ChatCompletionsModel, ModelCall, ModelSettings
+from feather_harness.core.model import ChatCompletionsModel, ModelCall, ModelSettings, UsageTotals
 from feather_harness.tools import Tool, ToolResult, ToolSpec
 from openai import AsyncOpenAI
 
@@ -153,6 +153,15 @@ class BraintrustRollout:
             "agent_stop_message": stop_message,
         }
         self.add_metadata(metadata)
+
+    def record_usage(self, usage: UsageTotals) -> None:
+        """Rollout totals of provider-billed usage; per-call values are on the LLM spans."""
+        totals = usage.model_dump(mode="json", exclude_none=True, exclude={"providers"})
+        self.add_metrics(
+            {name if name.startswith("model_") else f"model_{name}": value
+             for name, value in totals.items()}
+        )
+        self.add_metadata({"model_providers": list(usage.providers)})
 
     def record_completed(
         self,

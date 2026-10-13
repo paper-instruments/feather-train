@@ -13,12 +13,55 @@ from verifiers.v1 import SandboxError
 from feather_train.grading.grader import (
     GradingConfig,
     HarborGradingError,
+    _packaged_grader_test_command,
     grade_task,
 )
 from feather_train.grading.report import build_judge_span_output
 from feather_train.grading.types import AgentEvidence
 
 from .helpers import GraderSandbox, task
+
+
+def test_official_fireworks_judge_credential_is_explicit():
+    command = _packaged_grader_test_command(
+        task_id="task-1",
+        world_id="world-1",
+        grading_evidence_mode=None,
+        judge_api_key="test-fireworks-key",
+        judge_api_key_var="FIREWORKS_API_KEY",
+        official=True,
+    )
+    assert "FIREWORKS_AI_API_KEY=test-fireworks-key" in command
+    assert "FIREWORKS_API_KEY=test-fireworks-key" in command
+
+    unrelated = _packaged_grader_test_command(
+        task_id="task-1",
+        world_id="world-1",
+        grading_evidence_mode=None,
+        judge_api_key="test-other-key",
+        judge_api_key_var="OPENAI_VERIFIER_API_KEY",
+        official=True,
+    )
+    assert "test-other-key" not in unrelated
+
+
+def test_official_judge_explicit_proxy_reaches_benchmark_wrapper(monkeypatch):
+    monkeypatch.setenv("BRAINTRUST_API_KEY", "unrelated-secret")
+    command = _packaged_grader_test_command(
+        task_id="task-1",
+        world_id="world-1",
+        grading_evidence_mode=None,
+        judge_api_key="test-openrouter-key",
+        judge_api_key_var="OPENROUTER_API_KEY",
+        judge_base_url="https://openrouter.ai/api/v1",
+        judge_model="openai/deepseek/deepseek-v4-flash-0731",
+        official=True,
+    )
+    assert "OPENAI_VERIFIER_API_KEY=test-openrouter-key" in command
+    assert "OPENAI_VERIFIER_BASE_URL=https://openrouter.ai/api/v1" in command
+    assert "OPENAI_VERIFIER_MODEL=openai/deepseek/deepseek-v4-flash-0731" in command
+    assert "FIREWORKS_AI_API_KEY" not in command
+    assert "unrelated-secret" not in command
 
 
 @pytest.mark.asyncio
@@ -37,6 +80,11 @@ async def test_grade_retries_failed_judge(failure):
     assert result.report_error is None
     assert "report_error" not in build_judge_span_output(result)
     assert sandbox.test_runs == 2
+    assert any(
+        "rm -f -- /logs/verifier/reward.txt /logs/verifier/reward.json /logs/verifier/reward_detail.json"
+        in command
+        for command in sandbox.commands
+    )
     assert result.failed_attempts[0].exit_code == (1 if failure == 1 else -1)
     assert sandbox.overlays["task/final_response.txt"] == b"Answer"
     assert sandbox.overlays["task/instruction.md"] == b"Solve this exactly."
@@ -206,3 +254,48 @@ async def test_malformed_report_preserves_reward_without_repeating_grader(report
     assert output["report_error"] == result.report_error
     assert output["criteria"] == []
     assert output["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_official_harbor_mode_grades_from_image_workdir(monkeypatch):
+    monkeypatch.setenv("OPENAI_VERIFIER_API_KEY", "should-not-reach-official-test-sh")
+    monkeypatch.setenv("OPENAI_VERIFIER_BASE_URL", "https://unrelated.example/v1")
+    monkeypatch.setenv("BRAINTRUST_API_KEY", "should-not-reach-official-test-sh")
+    monkeypatch.setenv("REDUCTO_API_KEY", "should-not-reach-official-test-sh")
+    sandbox = GraderSandbox()
+    result = await grade_task(
+        task(environment_mode="shared", workdir="/app", verifier_timeout_sec=1800),
+        sandbox,
+        instruction="Solve this.",
+        config=GradingConfig(poll_timeout=300),
+        final_answer="answer",
+    )
+    assert result.score == 0.75
+    assert "/opt/venv/bin" in sandbox.test_command
+    assert "/root/.bashrc" in sandbox.test_command
+    assert "export PATH" in sandbox.test_command
+    assert "cd /app" in sandbox.test_command
+    assert "--chdir=/app" not in sandbox.test_command
+    assert sandbox.test_timeout == 1800
+    assert not any("importlib.metadata" in command for command in sandbox.commands)
+    assert not any("rm -rf -- /logs &&" in command for command in sandbox.commands)
+    assert any("rm -rf -- /logs/verifier" in command for command in sandbox.commands)
+    assert "PATH=/usr/local/bin:/usr/bin:/bin" not in sandbox.test_command
+    assert "OPENAI_VERIFIER_API_KEY" not in sandbox.test_command
+    assert "OPENAI_VERIFIER_BASE_URL" not in sandbox.test_command
+    assert "BRAINTRUST_API_KEY" not in sandbox.test_command
+    assert "REDUCTO_API_KEY" not in sandbox.test_command
+
+
+@pytest.mark.asyncio
+async def test_official_harbor_mode_reads_reward_json_when_txt_is_absent():
+    sandbox = GraderSandbox(reward_json=b'{"reward":0,"apply_failed":1}')
+    result = await grade_task(
+        task(environment_mode="separate", workdir="/app"),
+        sandbox,
+        instruction="Solve this.",
+        config=GradingConfig(poll_timeout=300, judge_retry_backoff_seconds=0),
+        final_answer="answer",
+    )
+    assert result.score == 0.0
+    assert sandbox.test_runs == 1

@@ -133,6 +133,10 @@ async def test_auth_failure_is_non_retryable_and_does_not_echo_private_input(ope
     ("status", "tag", "reason"),
     [
         (200, "CRAWL_NOT_FOUND", "not_found"),
+        # A site refusing Exa's crawler once aborted whole agent runs (FrontierFinance, 2026-10-09).
+        (200, "CRAWL_HTTP_403", "not_available"),
+        (200, "CRAWL_HTTP_404", "not_found"),
+        (200, "CRAWL_HTTP_503", "not_available"),
         (200, "UNSUPPORTED_URL", "unsupported"),
         (403, "ROBOTS_FILTER_FAILED", "not_available"),
         (400, "INVALID_URLS", "unsupported"),

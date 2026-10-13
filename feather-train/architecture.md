@@ -82,13 +82,22 @@ execution and grading spans, with group and sampling-policy metadata. The
   Harbor representations, into filesystem/process snapshots. Dependencies and MCP
   services do not need to be rebuilt for each rollout.
 - **Isolation:** the loop, model credentials, and host-side services stay on the
-  coordinator. Docker Compose separates the agent, MCP services, and grader.
+  coordinator. Docker Compose separates the agent, MCP services, and peer grader.
+  Official Harbor shared mode grades in the solver container; separate mode
+  collects declared artifacts into a fresh tests-image verifier. The template
+  determines the grading boundary; see [grading](grading.md).
 - **Reliable remote tools:** operations execute beside their files, minimizing E2B
   round trips. Saved invocation results allow connection recovery without replaying
   side effects. See [remote runtime](remote-runtime.md).
 - **Training bookkeeping:** Verifiers and Renderers preserve sampled tokens across
   turns and distinguish generations from environment content. The agent itself
   does not need training-specific logic.
+
+Harness configuration carries the model prompt budget, sampling settings,
+compaction policy, startup profile, optional image reads, and research restrictions
+to each attempt. Prompt and per-call usage receipts are recorded in rollout
+metadata. Optional benchmark deliverable capture publishes bounded local evidence
+before grading isolation; capture failures leave the grading result intact.
 
 ## Integrating another training framework
 

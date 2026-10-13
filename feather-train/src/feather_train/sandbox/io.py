@@ -17,7 +17,8 @@ async def exec_bash(session: SandboxIO, cmd: str, *, timeout: float | None = Non
     return await session.exec("bash", "-lc", cmd, timeout=timeout)
 
 
-async def read_remote_bytes(session: SandboxIO, path: str) -> bytes:
+async def read_remote_bytes(session: SandboxIO, path: str, *, check: bool = True) -> bytes | None:
+    """Read with transport recovery; unchecked command failures return None."""
     # E2B decodes command output as text; base64 preserves arbitrary file bytes.
     # Retry transport failures while reading an existing result, never grader execution.
     async for attempt in AsyncRetrying(
@@ -29,6 +30,8 @@ async def read_remote_bytes(session: SandboxIO, path: str) -> bytes:
         with attempt:
             result = await exec_bash(session, f"base64 -w0 {shlex.quote(path)}", timeout=60)
     if not result.ok():
+        if not check:
+            return None
         detail = result.stderr or result.stdout
         raise SandboxError(f"read_remote_bytes {path} failed: {detail[:500]}")
     return base64.b64decode(result.stdout)

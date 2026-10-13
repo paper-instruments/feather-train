@@ -7,7 +7,7 @@ and PDFs using specialized Paper packages.
 - **Knowledge-work skills:** bundled workflows and API references for working with
   Word documents, Excel spreadsheets, PowerPoint presentations, and PDFs.
 - **Tools:** file editing, search, shell execution, background tasks, todo lists,
-  and connections to MCP servers.
+  connections to MCP servers, and optional Exa web search and fetch.
 - **Long-running tasks:** context compaction summarizes earlier work while retaining
   recent turns and todo state.
 - **CLI and library:** run against an OpenAI-compatible Chat Completions endpoint
@@ -17,25 +17,73 @@ and PDFs using specialized Paper packages.
 
 ## Install and run
 
-Requires Linux, Python 3.12+, Bash, ripgrep, and uv. PDF rendering also needs Poppler
-(`poppler-utils` on Debian/Ubuntu). From the repository root:
+The repository's [installer](../install.sh) supports macOS and Linux. It requires
+Bash, curl, and Git, and downloads its own uv and managed Python 3.12. Install with:
 
 ```bash
-uv sync --package feather-harness --extra office
-mkdir -p workspace
+curl -fsSL https://raw.githubusercontent.com/paper-instruments/feather-train/main/install.sh | bash
+```
 
-# Export OPENAI_API_KEY first. For an unauthenticated local server, use a placeholder.
-uv run --package feather-harness --extra office feather \
+To install from a local checkout, run from the repository root:
+
+```bash
+FEATHER_SOURCE_DIR="$PWD" bash install.sh
+```
+
+The installer uses the repository lockfile to install Harness with the `office`
+extra into `~/.local/share/feather/versions/<installation>/venv`. This includes
+`paper-docx`, `paper-pptx`, `paper-xlsx`, and the PDF libraries. Python packages stay
+in this Feather environment, regardless of the directory or active virtualenv
+from which you install. It does not use system pip, install Train or Eval, require
+sudo, or modify shell profiles.
+
+The launcher at `~/.local/bin/feather` sets `VIRTUAL_ENV` and puts Feather's virtualenv
+first on `PATH`. It clears inherited `PYTHONHOME` and `PYTHONPATH` and disables
+user-site packages. By default, both the CLI and the model's `python` and `python3`
+shell commands use Feather's packages without activating an environment.
+If `~/.local/bin` is not on `PATH`, use the full launcher path below or add that
+directory yourself.
+
+```bash
+mkdir -p workspace
+export OPENAI_API_KEY=YOUR_API_KEY
+
+~/.local/bin/feather \
   --model YOUR_MODEL --base-url http://localhost:8000/v1 \
   --workdir "$PWD/workspace" "Summarize the documents in this workspace into a briefing.md file." > run.json
 ```
 
 Use the model identifier and endpoint supplied by your provider. Omit `--base-url`
-for the OpenAI client's default endpoint.
+for the OpenAI client's default endpoint. For an unauthenticated local server,
+use a placeholder API key. The workspace must already exist; running the CLI
+installs skills and writes logs there. Installation itself does not write into
+your working directory.
 
-The `office` extra installs the three Paper packages and the PDF authoring, extraction,
-and rendering libraries used by the bundled skills. For an installed release, use
-`uv pip install "feather-harness[office]"`. The Paper packages replace `python-docx`,
+Rerun the installer to update. It builds a fresh version and switches the `current`
+symlink only after installation succeeds, retaining the previous version. Configure
+the installer with environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FEATHER_INSTALL_DIR` | `~/.local/share/feather` | Installation root; overrides must be absolute paths. |
+| `FEATHER_BIN_DIR` | `~/.local/bin` | Launcher directory; overrides must be absolute paths. |
+| `FEATHER_REF` | `main` | Repository branch, tag, or commit to install. |
+| `FEATHER_REPO` | `https://github.com/paper-instruments/feather-train.git` | Git URL used for remote installations. |
+| `FEATHER_SOURCE_DIR` | Unset | Absolute path to a local checkout to install instead. |
+
+For example, install a pinned version from a local copy of the installer with
+`FEATHER_REF=<full-commit-sha> bash install.sh`. To uninstall the default installation:
+
+```bash
+rm -f "$HOME/.local/bin/feather"
+rm -rf "$HOME/.local/share/feather"
+```
+
+If you customized the directories, remove the launcher and installation root at
+those paths instead. Workspace files, skills, and run logs remain in their original
+locations.
+
+The Paper packages replace `python-docx`,
 `python-pptx`, and `openpyxl`; do not install those upstream distributions alongside them.
 System binaries are installed separately from the Python extra. On Debian/Ubuntu:
 
@@ -48,8 +96,57 @@ sudo apt-get install -y libreoffice-calc tesseract-ocr
 
 LibreOffice is needed for `openpyxl.oracle` recalculation. Tesseract provides OCR
 for scanned documents; install language packs for the languages you need.
-Shell commands inherit your `PATH` and Python environment, and run with your OS
-permissions.
+Shell commands run with your OS permissions and inherit environment variables,
+including provider credentials. The installer manages Python dependencies;
+external programs such as ripgrep, Poppler, LibreOffice, and Tesseract remain
+system prerequisites. On macOS, install the corresponding tools using your system
+package manager.
+
+For source development, use Python 3.12+ and uv from the repository root:
+
+```bash
+uv sync --package feather-harness --extra office --locked
+uv run --package feather-harness --extra office --locked feather \
+  --model YOUR_MODEL --workdir ./workspace "Summarize this workspace." > run.json
+```
+
+This source workflow uses the repository's `.venv`. Use `uv run` or activate it so
+model shell commands see its packages. Harness is not currently published on PyPI;
+library consumers should use the [pinned Git source configuration](../README.md#use-the-packages-from-another-repository).
+
+### Task Python
+
+Use `--python` to select an existing interpreter for the model's task commands:
+
+```bash
+~/.local/bin/feather --model YOUR_MODEL \
+  --python /absolute/path/to/project/.venv/bin/python \
+  --workdir /absolute/path/to/project "Analyze this project's data." > run.json
+```
+
+The optional JSON configuration field `python` accepts the same path. Relative
+paths resolve from the directory where you launch Feather, not `--workdir`.
+Without an override, the installed CLI uses Feather's environment for task Python.
+
+With an override, bare `python` and `python3` both invoke exactly the selected
+interpreter, and its directory is added to the task's `PATH` for project console
+tools. Feather's CLI and internal workers continue using its own runtime. The
+override does not install packages into your selected environment or combine its
+site-packages with Feather's.
+
+The task shell exposes `FEATHER_PYTHON`, which points to Feather's interpreter.
+For example, model shell commands can use each environment explicitly:
+
+```bash
+python analyze_project.py
+"$FEATHER_PYTHON" create_deck.py
+```
+
+The first command uses your selected project's dependencies; the second uses the
+bundled Paper packages. A script that needs dependencies from both environments
+must have them installed together in one environment or split the work into
+separate commands. A short Bash tool description explains the interpreter choice
+to the model; selecting task Python does not change the system prompt or skills.
 
 ## Configuration
 
@@ -68,7 +165,7 @@ JSON config supports model settings, context compaction, and MCP servers. For ex
 ```
 
 ```bash
-cat task.txt | uv run --package feather-harness --extra office feather --config config.json - > run.json
+cat task.txt | ~/.local/bin/feather --config config.json - > run.json
 ```
 
 CLI flags override matching config fields. The workspace must already exist. Choose
@@ -83,16 +180,38 @@ tools. It requires an image-capable endpoint unless `enable_image_tools` is expl
 training prompt, original manuals and descriptions, and disabled images. Profiles are
 fixed at startup. See [profiles](docs/profiles.md) for compatibility details.
 
-Both CLI profiles use the OpenAI SDK's two retries for eligible transient inference
-failures (at most three attempts per request), including its backoff and jitter.
+Both CLI profiles stream model responses and retry transient inference failures with
+the Fireworks training sampler's policy: up to seven attempts per request with 2-30
+second jittered exponential backoff, honoring `Retry-After` up to the cap. Connection
+errors, timeouts, streams that end without a finish reason, and HTTP 408, 429, 500,
+502, 503 and 504 are retried; other client errors are not. Streaming makes the client's
+request timeout an idle timeout, so a long generation that keeps producing tokens is not
+cut off and resent unchanged. `model_retry` in the JSON config overrides the policy.
 This does not replay a tool or restart a trajectory. Library callers retain ownership
-of their supplied client's retry policy. Upgrading the CLI changes the old zero-retry
-evaluation condition even with `train`. Editable workspace dependencies use the checked-out
+of their supplied client's retry policy and stay nonstreaming unless they opt in. Editable workspace dependencies use the checked-out
 source; unchanged package versions do not isolate new builds from this change.
+
+Each compaction allows three retries after its initial summary request (four attempts
+total) when the model returns an empty summary. With production response validation
+enabled, summaries interrupted by `length` or `error` are also retried; refusals and
+content filtering remain fatal. Each attempt receives the same input and settings,
+and its response is retained in a separate compaction trace segment. Completed tools
+are not replayed, only successful compactions are counted, and exhaustion preserves
+the original execution evidence in `AgentRunError`. Transport failures keep the model
+or supplied client's existing retry policy; compaction does not multiply that budget.
+
+`additional_instructions` appends generic guidance to the system prompt, expanding
+`{{ workspace }}` to the resolved workspace path while preserving task text. Set
+`eval_prompt_output` to save the selected profile and SHA-256 of the actual system
+prompt before model execution. `enable_web_tools: true` adds Exa-backed `web_search`
+and `web_fetch`, using `EXA_API_KEY`; library callers pass a `web_provider` to `run_local`.
+An optional `prompt_token_budget` configures local GLM tokenizer accounting; install
+`feather-harness[token-count]` for the pinned tokenizer dependencies.
 
 Feather installs bundled skills under `.agents` and saves shell logs under
 `.feather/tasks` in the workspace. `skills_dir` copies task-provided skills after
-bundled installation. MCP connections support HTTP/SSE and stdio transports.
+bundled installation. Both `.agents/` and `.feather/` are added to the checkout's local
+Git exclude file to keep harness state out of patch submissions. MCP connections support HTTP/SSE and stdio transports.
 
 Parallel subagents are opt-in for `prod`. Add `"subagents": {"max_concurrent": 3,
 "max_agents": 8, "max_turns": 50}` to JSON config, or pass a `SubagentConfig` to
@@ -136,6 +255,12 @@ This minimal example has no tools. `run_local` assembles the CLI's local tools a
 selected profile; custom callers can bind `Tool` objects themselves. See
 the [tool reference](docs/tools.md) for file revisions, Bash tasks, and todo semantics.
 
+`TraceSegment.calls` records provider usage for execution and compaction calls.
+`RunResult.usage()` totals those records, including cached and reasoning tokens and
+provider-reported costs. Missing provider fields remain unknown rather than being
+reported as zero. Native signed/encrypted reasoning is replayed within an execution
+window and removed when compaction replaces that window's context.
+
 Custom callers can pass `end_run_after_tools(message, results)` to `FeatherAgent`.
 This synchronous hook receives the assistant message and a tuple of `ToolResult`
 objects in tool-call order after all of that message's tools have run. Returning
@@ -165,16 +290,19 @@ Linux-specific process tests skip on macOS.
 
 ### Image inspection
 
-`prod` enables `view_image`, image reads, and MCP images by default. Set
+`prod` enables image reads through `read` and MCP images by default. Set
 `enable_image_tools: false` for a text-only endpoint; model names are not used to infer
-capabilities. Supported images are PNG/JPEG/GIF/WebP up to 10 MiB. Audio remains
-unsupported. Render document pages with the document skills when useful before
-inspecting them; installed manuals do not guarantee a working renderer.
+capabilities. `read` accepts PNG/JPEG/GIF/WebP, and converts BMP/TIFF, up to 20 MB of
+input. Like Claude Code and ZCode, it downscales images to at most 2000 px on the longest
+side and re-encodes them to at most 5 MB of base64, telling the model the original and
+displayed sizes. Resizing uses Pillow when the execution environment has it; without
+Pillow, images that need no resizing still pass through. Audio remains unsupported.
+Render document pages to PNG, as the pdf skill describes, before inspecting them.
 
 Native traces retain image data. API requests place images in a labeled user message
 after all parallel tool results, because Chat Completions tool messages accept text
 only. Compaction receives the actual images; unmeasured images provisionally count as
 8192 tokens each until provider usage is available. This estimate is model-dependent,
-not an exact visual-token budget. The existing explicit `enable_image_tools: true`
-override also works in `train` for `view_image` and MCP; training `read(image)` retains
-its historical disabled-vision response.
+not an exact visual-token budget. An explicit `enable_image_tools: true` also
+enables image reads and MCP images in `train`; without it, training `read(image)` keeps
+its disabled-vision response.

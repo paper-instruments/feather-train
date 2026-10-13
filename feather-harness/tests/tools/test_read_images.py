@@ -40,8 +40,8 @@ async def test_image_reads_require_capability_and_never_record_text_revisions(
 @pytest.mark.parametrize(
     "case, error, message",
     [
-        ("invalid_format", "tool_error", "Expected a PNG, JPEG, GIF or WebP image"),
-        ("oversized", "tool_error", "10 MiB"),
+        ("invalid_format", "tool_error", "Expected a PNG, JPEG, GIF, or WebP image"),
+        ("oversized", "tool_error", "Maximum input size is 20 MB"),
         ("outside", "invalid_path", "Provide a path inside the workspace"),
         ("symlink", "invalid_path", "Provide a path inside the workspace"),
     ],
@@ -56,7 +56,7 @@ async def test_image_reads_enforce_loader_boundaries(
         image.write_bytes(b"not an image")
     elif case == "oversized":
         with image.open("wb") as stream:
-            stream.truncate(10 * 1024 * 1024 + 1)
+            stream.truncate(20 * 1024 * 1024 + 1)
     else:
         outside = tmp_path / "private.png"
         outside.write_bytes(PNG)

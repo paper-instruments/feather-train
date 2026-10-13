@@ -70,7 +70,7 @@ async def test_empty_summary_fails_without_losing_completed_tool_work():
     async def invoke(raw):
         return ToolResult(content="finished")
 
-    model = ScriptedModel(work_message(), AssistantMessage(content=""), tokens=120000)
+    model = ScriptedModel(work_message(), *[AssistantMessage(content="")] * 4, tokens=120000)
     with pytest.raises(AgentRunError, match="summary was empty") as raised:
         await FeatherAgent(
             model=model, tools=(tool(invoke),), compaction=CompactionConfig(enabled=True)
@@ -79,11 +79,82 @@ async def test_empty_summary_fails_without_losing_completed_tool_work():
     assert result.num_turns == 1
     assert result.compactions == 0
     assert result.execution_messages()[-1] == ToolMessage(tool_call_id="k", content="finished")
-    assert [segment.kind for segment in result.segments] == ["execution", "compaction"]
-    assert result.segments[-1].messages == (AssistantMessage(content=""),)
+    assert [segment.kind for segment in result.segments] == ["execution", *["compaction"] * 4]
+    assert all(segment.messages == (AssistantMessage(content=""),) for segment in result.segments[1:])
+    assert all(call.request == model.calls[1].request for call in model.calls[1:])
 
 
-async def test_compaction_preserves_sampling_and_provider_routing():
+@pytest.mark.parametrize("keep_recent_turns", [0, 1])
+async def test_summary_retries_preserve_context_settings_and_completed_tool_work(keep_recent_turns):
+    completed = []
+    transcripts = []
+
+    async def invoke(raw):
+        completed.append(raw)
+        return ToolResult(content="finished")
+
+    async def save(content):
+        transcripts.append(content)
+
+    settings = ModelSettings(temperature=1, top_p=0.95, reasoning_effort="max")
+    model = ScriptedModel(
+        work_message(),
+        AssistantMessage(content=None, reasoning_content="thinking only"),
+        AssistantMessage(content=" "),
+        AssistantMessage(content="summary"),
+        AssistantMessage(content="done"),
+        tokens=120000,
+    )
+    result = await FeatherAgent(
+        model=model,
+        tools=(tool(invoke),),
+        compaction=CompactionConfig(enabled=True, keep_recent_turns=keep_recent_turns),
+        compaction_tool_state=lambda: (f"completed={len(completed)}",),
+        save_transcript=save,
+    ).run(RunRequest(messages=(UserMessage(content="task"),), model_settings=settings))
+
+    assert result.final_answer == "done"
+    assert (result.num_turns, result.compactions, result.recoveries) == (2, 1, 0)
+    assert completed == ["{}"]
+    assert len(transcripts) == 1
+    assert all(call.request == model.calls[1].request for call in model.calls[1:4])
+    assert all(
+        call.settings == settings.model_copy(update={"max_tokens": 65536})
+        for call in model.calls[1:4]
+    )
+    assert f"completed={1 - keep_recent_turns}" in result.segments[-1].input[1].content
+    if keep_recent_turns:
+        assert result.segments[-1].input[-1] == ToolMessage(tool_call_id="k", content="finished")
+    assert result.execution_messages() == (
+        UserMessage(content="task"), work_message(),
+        ToolMessage(tool_call_id="k", content="finished"), AssistantMessage(content="done"),
+    )
+    for segment, call in zip(result.segments, model.calls, strict=True):
+        assert [m.model_dump(mode="json") for m in segment.input] == call.request["messages"]
+
+
+async def test_each_compaction_has_its_own_three_retries():
+    async def invoke(raw):
+        return ToolResult(content="finished")
+
+    failed = [AssistantMessage(content="")] * 3
+    model = ScriptedModel(
+        work_message(), *failed, AssistantMessage(content="first summary"),
+        work_message(), *failed, AssistantMessage(content="second summary"),
+        AssistantMessage(content="done"), tokens=120000,
+    )
+    result = await FeatherAgent(
+        model=model, tools=(tool(invoke),), compaction=CompactionConfig(enabled=True)
+    ).run(request())
+
+    assert (result.final_answer, result.num_turns, result.compactions) == ("done", 3, 2)
+    assert [call.kind for call in model.calls] == [
+        "agent", *["compaction"] * 4, "agent", *["compaction"] * 4, "agent"
+    ]
+
+
+@pytest.mark.parametrize("summary_limit", [None, 131072])
+async def test_compaction_preserves_sampling_and_provider_routing(summary_limit):
     async def invoke(raw):
         return ToolResult(content="finished")
 
@@ -91,18 +162,26 @@ async def test_compaction_preserves_sampling_and_provider_routing():
         temperature=1.0,
         top_p=0.95,
         max_tokens=131072,
+        reasoning_effort="max",
         extra_body={"provider": {"only": ["baseten"]}},
     )
     model = ScriptedModel(
         work_message(), AssistantMessage(content="summary"), AssistantMessage(content="done"), tokens=120000
     )
+    compaction = (
+        CompactionConfig(enabled=True)
+        if summary_limit is None
+        else CompactionConfig(enabled=True, max_tokens=summary_limit)
+    )
     await FeatherAgent(
-        model=model, tools=(tool(invoke),), compaction=CompactionConfig(enabled=True)
+        model=model, tools=(tool(invoke),), compaction=compaction
     ).run(RunRequest(messages=(UserMessage(content="task"),), model_settings=settings))
 
     assert [call.kind for call in model.calls] == ["agent", "compaction", "agent"]
     assert model.calls[0].settings == settings
-    assert model.calls[1].settings == settings.model_copy(update={"max_tokens": 65536})
+    assert model.calls[1].settings == settings.model_copy(
+        update={"max_tokens": 65536 if summary_limit is None else summary_limit}
+    )
     assert model.calls[2].settings == settings
 
 
@@ -341,3 +420,17 @@ async def test_transcript_save_failure_stops_before_summary_request():
 
     assert len(model.calls) == 1
     assert raised.value.result.execution_messages()[-1].content == "finished"
+
+
+def test_explicit_trigger_replaces_the_window_derived_threshold():
+    # A 1M window would otherwise compact at 850k; the vendor-aligned trigger waits until 960k.
+    context = [UserMessage(content="task"), AssistantMessage(content="done")]
+    config = CompactionConfig(enabled=True, context_window_tokens=1_000_000, trigger_tokens=960_000)
+    measured = Accounting(
+        turns=1, turns_since_compaction=1, measured_tokens=900_000, measured_message_count=2
+    )
+
+    assert CompactionConfig(enabled=True, context_window_tokens=1_000_000).threshold_tokens == 850_000
+    assert check_compaction(context, config, measured, 10) is None
+    with pytest.raises(ValueError, match="below context_window_tokens"):
+        CompactionConfig(context_window_tokens=131072, trigger_tokens=131072)

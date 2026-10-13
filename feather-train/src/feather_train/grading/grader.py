@@ -57,6 +57,7 @@ _HF_CONFIGURATION_ERRORS = (
 
 # Task-owned grader input and output files.
 HARBOR_REWARD_PATH = f"{VERIFIER_LOGS_DIR}/reward.txt"
+HARBOR_REWARD_JSON_PATH = f"{VERIFIER_LOGS_DIR}/reward.json"
 HARBOR_REWARD_DETAIL_PATH = f"{VERIFIER_LOGS_DIR}/reward_detail.json"
 HARBOR_SUBMISSION_TRANSPORT_PATH = f"{TESTS_DIR}/submission_transport.txt"
 HARBOR_AGENT_TRACE_PATH = f"{TASK_DIR}/agent_trace.json"
@@ -97,7 +98,7 @@ class GradingConfig(BaseModel):
     judge_retry_max_backoff_seconds: float = Field(30.0, ge=0.0)
     # Trajectory conversion and staging scale with rollout length; graders opt in explicitly.
     stage_agent_trace: bool = False
-    # Observatory runs set this explicitly so the immutable run receipt names
+    # Evaluation runs set this explicitly so the immutable run receipt names
     # the exact model invoked by the portable grader. Legacy benchmark runs may
     # omit it and retain the grader archive's default.
     judge_model: str | None = Field(default=None, min_length=1, max_length=500)
@@ -186,6 +187,7 @@ async def grade_task(
             session,
             steps=steps,
             timeout=config.poll_timeout,
+            preserve_logs=task.environment_mode is not None,
         )
         await _stage_packaged_grader(
             session,
@@ -197,11 +199,12 @@ async def grade_task(
             overlays=overlays,
             timeout=config.poll_timeout,
         )
-        await _assert_harbor_grader_dependencies(
-            session,
-            steps=steps,
-            timeout=config.poll_timeout,
-        )
+        if task.environment_mode is None:
+            await _assert_harbor_grader_dependencies(
+                session,
+                steps=steps,
+                timeout=config.poll_timeout,
+            )
     except Exception as exc:
         raise HarborGradingError(
             f"grading[{grading_run_id}] {type(exc).__name__}: {exc}",
@@ -209,15 +212,28 @@ async def grade_task(
             retryable=not isinstance(exc, NON_RETRYABLE_CAUSES),
         ) from exc
 
+    workdir = task.workdir if task.environment_mode is not None else TESTS_DIR
+    timeout = task.verifier_timeout_sec or config.poll_timeout
     cmd = _packaged_grader_test_command(
         task_id=task.task_id,
         world_id=task.world_id,
         grading_evidence_mode=task.grading_evidence_mode,
         judge_model=config.judge_model,
-        judge_api_key=_judge_api_key(config),
-        judge_base_url=_judge_base_url(config),
+        judge_api_key=(
+            _judge_api_key(config)
+            if task.environment_mode is None or config.judge_api_key_var
+            else ""
+        ),
+        judge_api_key_var=config.judge_api_key_var,
+        judge_base_url=(
+            _judge_base_url(config)
+            if task.environment_mode is None
+            else config.judge_base_url or ""
+        ),
         braintrust_parent=braintrust_parent,
         braintrust_project=braintrust_project,
+        workdir=workdir or TESTS_DIR,
+        official=task.environment_mode is not None,
     )
     failed_attempts: list[JudgeAttemptFailure] = []
     for attempt in range(1, config.judge_max_attempts + 1):
@@ -225,7 +241,7 @@ async def grade_task(
             session,
             cmd,
             attempt=attempt,
-            timeout=config.poll_timeout,
+            timeout=timeout,
             steps=steps,
         )
 
@@ -293,6 +309,7 @@ async def grade_task(
             reset = await exec_bash(
                 session,
                 f"rm -f -- {shlex.quote(HARBOR_REWARD_PATH)} "
+                f"{shlex.quote(HARBOR_REWARD_JSON_PATH)} "
                 f"{shlex.quote(HARBOR_REWARD_DETAIL_PATH)}",
                 timeout=config.poll_timeout,
             )
@@ -311,12 +328,21 @@ async def _prepare_harbor_directories(
     *,
     steps: list[GradeStep],
     timeout: float,
+    preserve_logs: bool = False,
 ) -> None:
     with _timed_step(steps, "prepare_grader_directories") as step:
         # Empty ``/tests`` for a clean restore from baked tests. Do not unlink the
         # mountpoint: the peer verifier bind-mounts this host path for the snapshot life.
+        # Official separate collect lands under ``/logs/artifacts``; reset only
+        # ``/logs/verifier`` so a planted reward cannot survive into the read.
+        logs_reset = (
+            f"rm -rf -- {VERIFIER_LOGS_DIR}"
+            if preserve_logs
+            else "rm -rf -- /logs"
+        )
         command = (
-            f"rm -rf -- /logs {SNAPSHOTS_DIR} && "
+            f"{logs_reset} && "
+            f"rm -rf -- {SNAPSHOTS_DIR} && "
             f"rm -rf -- {shlex.quote(HARBOR_AGENT_TRACE_PATH)} && "
             f"mkdir -p -- {TESTS_DIR} && "
             f"find {TESTS_DIR} -mindepth 1 -delete && "
@@ -497,36 +523,76 @@ def _packaged_grader_test_command(
     grading_evidence_mode: str | None,
     judge_model: str | None = None,
     judge_api_key: str = "",
+    judge_api_key_var: str | None = None,
     judge_base_url: str = "",
     braintrust_parent: str | None = None,
     braintrust_project: str | None = None,
+    workdir: str = TESTS_DIR,
+    official: bool = False,
 ) -> str:
-    env_vars = {
-        "OPENAI_VERIFIER_API_KEY": judge_api_key,
-        "OPENAI_VERIFIER_BASE_URL": judge_base_url,
-        "OPENAI_VERIFIER_MODEL": judge_model or "",
-        "REDUCTO_API_KEY": os.environ.get("REDUCTO_API_KEY", ""),
-        "GRADER_INPUT_CHAR_CEILING": os.environ.get("GRADER_INPUT_CHAR_CEILING", ""),
-        "BRAINTRUST_API_KEY": os.environ.get("BRAINTRUST_API_KEY", ""),
-        "BRAINTRUST_PROJECT": braintrust_project or "",
-        "BRAINTRUST_ORG": os.environ.get("BRAINTRUST_ORG", ""),
-        "BRAINTRUST_API_URL": os.environ.get("BRAINTRUST_API_URL", ""),
-        "BRAINTRUST_ENVIRONMENT": os.environ.get("BRAINTRUST_ENVIRONMENT", ""),
-        "HARBOR_BRAINTRUST_PARENT": braintrust_parent or "",
-        "HARBOR_BRAINTRUST_CONTENT": os.environ.get("HARBOR_BRAINTRUST_CONTENT", ""),
-        "HARBOR_TASK_ID": task_id,
-        "HARBOR_WORLD_ID": world_id,
-        "HARBOR_GRADING_EVIDENCE_MODE": grading_evidence_mode or "",
-    }
+    if official:
+        env_vars = {
+            "HARBOR_TASK_ID": task_id,
+            "HARBOR_WORLD_ID": world_id,
+        }
+        if judge_api_key_var in {"FIREWORKS_AI_API_KEY", "FIREWORKS_API_KEY"}:
+            env_vars["FIREWORKS_AI_API_KEY"] = judge_api_key
+            env_vars["FIREWORKS_API_KEY"] = judge_api_key
+        if judge_model or judge_base_url:
+            env_vars.update({
+                "OPENAI_VERIFIER_API_KEY": judge_api_key,
+                "OPENAI_VERIFIER_BASE_URL": judge_base_url,
+                "OPENAI_VERIFIER_MODEL": judge_model or "",
+            })
+        trusted = ""
+    else:
+        env_vars = {
+            "OPENAI_VERIFIER_API_KEY": judge_api_key,
+            "OPENAI_VERIFIER_BASE_URL": judge_base_url,
+            "OPENAI_VERIFIER_MODEL": judge_model or "",
+            "REDUCTO_API_KEY": os.environ.get("REDUCTO_API_KEY", ""),
+            "GRADER_INPUT_CHAR_CEILING": os.environ.get("GRADER_INPUT_CHAR_CEILING", ""),
+            "BRAINTRUST_API_KEY": os.environ.get("BRAINTRUST_API_KEY", ""),
+            "BRAINTRUST_PROJECT": braintrust_project or "",
+            "BRAINTRUST_ORG": os.environ.get("BRAINTRUST_ORG", ""),
+            "BRAINTRUST_API_URL": os.environ.get("BRAINTRUST_API_URL", ""),
+            "BRAINTRUST_ENVIRONMENT": os.environ.get("BRAINTRUST_ENVIRONMENT", ""),
+            "HARBOR_BRAINTRUST_PARENT": braintrust_parent or "",
+            "HARBOR_BRAINTRUST_CONTENT": os.environ.get("HARBOR_BRAINTRUST_CONTENT", ""),
+            "HARBOR_TASK_ID": task_id,
+            "HARBOR_WORLD_ID": world_id,
+            "HARBOR_GRADING_EVIDENCE_MODE": grading_evidence_mode or "",
+        }
+        trusted = TRUSTED_GRADER_ENV
     env_assigns = " ".join(
         f"{key}={shlex.quote(value)}" for key, value in env_vars.items() if value
     )
-    env_suffix = f" {env_assigns}" if env_assigns else ""
+    env_prefix = " ".join(part for part in (trusted, env_assigns) if part)
+    env_prefix = f"{env_prefix} " if env_prefix else ""
+    token = (
+        f'token="$(cat {shlex.quote(STATE_EXPORT_TOKEN_PATH)} 2>/dev/null || true)"; '
+        f'export {STATE_EXPORT_TOKEN_ENV}="$token"; '
+    )
+    # Official pins hide pytest in /opt/venv and only add it from ~/.bashrc.
+    # grader_process already execs `bash -lc`; a nested non-interactive bash -c
+    # hits Ubuntu's "return if not interactive" guard, so activate here.
+    if official:
+        suffix = " ".join(
+            part for part in (env_assigns, f"/bin/bash {TESTS_DIR}/test.sh") if part
+        )
+        return (
+            f"{token}"
+            f"cd {shlex.quote(workdir)} && "
+            f"{{ [ -d /opt/venv/bin ] && PATH=/opt/venv/bin:$PATH; "
+            f"[ -f /root/.bashrc ] && . /root/.bashrc; "
+            f"export PATH; }} && "
+            f"{suffix}"
+        )
     # Peer verifier materialises the JSON-state token at prepare time (not container create).
     return (
-        f'token="$(cat {shlex.quote(STATE_EXPORT_TOKEN_PATH)} 2>/dev/null || true)"; '
-        f"/usr/bin/env --chdir={TESTS_DIR} "
-        f"{TRUSTED_GRADER_ENV}{env_suffix} "
+        f"{token}"
+        f"/usr/bin/env --chdir={shlex.quote(workdir)} "
+        f"{env_prefix}"
         f'{STATE_EXPORT_TOKEN_ENV}="$token" '
         f"/bin/bash {TESTS_DIR}/test.sh"
     )
@@ -570,26 +636,21 @@ async def _run_harbor_grader_attempt(
 
     with _timed_step(steps, "read_reward", attempt=attempt) as step:
         try:
-            reward_raw = await read_remote_bytes(session, HARBOR_REWARD_PATH)
+            score, source, payload = await _read_harbor_reward(session)
         except SandboxError as exc:
             step.ok = False
             step.metadata["error"] = str(exc)
             return JudgeAttemptFailure(
                 attempt=attempt,
-                message=f"reward.txt read failed: {exc}",
+                message=f"reward read failed: {exc}",
                 exit_code=process.exit_code,
             )
-        step.metadata["bytes"] = len(reward_raw)
-        reward_txt = reward_raw.decode("utf-8", errors="replace").strip()
-        try:
-            score = float(reward_txt)
-        except ValueError:
-            score = None
+        step.metadata["source"] = source
         if score is None or not math.isfinite(score) or not 0.0 <= score <= 1.0:
             step.ok = False
             return JudgeAttemptFailure(
                 attempt=attempt,
-                message=f"invalid reward.txt: {reward_txt[:500]!r}",
+                message=f"invalid {source}: {payload[:500]!r}",
                 retriable=False,
                 exit_code=process.exit_code,
             )
@@ -604,6 +665,27 @@ async def _run_harbor_grader_attempt(
         detail=detail,
         stdout=process.stdout,
     )
+
+
+async def _read_harbor_reward(
+    session: SandboxIO,
+) -> tuple[float | None, str, str]:
+    """Official Harbor suites write reward.json; Factory HarborGrader writes reward.txt."""
+    reward_json = await read_remote_bytes(session, HARBOR_REWARD_JSON_PATH, check=False)
+    if reward_json is not None:
+        payload = reward_json.decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(payload)
+            score = float(parsed["reward"])
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return None, HARBOR_REWARD_JSON_PATH, payload
+        return score, HARBOR_REWARD_JSON_PATH, payload
+    reward_raw = await read_remote_bytes(session, HARBOR_REWARD_PATH)
+    payload = reward_raw.decode("utf-8", errors="replace").strip()
+    try:
+        return float(payload), HARBOR_REWARD_PATH, payload
+    except ValueError:
+        return None, HARBOR_REWARD_PATH, payload
 
 
 async def _read_reward_detail(

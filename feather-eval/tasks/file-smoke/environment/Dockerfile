@@ -1,5 +1,6 @@
 FROM python:3.12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    file poppler-utils libreoffice-calc libreoffice-writer libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m pip uninstall -y openpyxl python-docx python-pptx \
     && python -m pip install --no-cache-dir --force-reinstall \
