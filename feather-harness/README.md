@@ -139,9 +139,23 @@ full history stays inspectable.
 
 ## Install and run
 
-You can run Feather standalone on macOS or Linux. The repository's
-[installer](../install.sh) needs Bash, curl, and Git, and brings its own uv and
-Python 3.12:
+There are three ways to use Feather:
+
+- **[Run the CLI](#run-the-cli):** install a standalone `feather` command and run
+  tasks against a folder of files. No checkout needed.
+- **[Use it in your project](#use-it-in-your-project):** add the harness as a Python
+  dependency and call the agent from your own code.
+- **[Evaluate on Harbor tasks](#evaluate-on-harbor-tasks):** run Feather inside
+  [Harbor](https://pypi.org/project/harbor/) task sandboxes with
+  [`feather-eval`](../feather-eval/README.md).
+
+The CLI and the library both run shell commands locally with your OS permissions,
+and both need the [system packages](#recommended-packages).
+
+### Run the CLI
+
+The repository's [installer](../install.sh) works on macOS and Linux. It needs Bash,
+curl, and Git, and brings its own uv and Python 3.12:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/paper-instruments/feather-train/main/install.sh | bash
@@ -162,12 +176,59 @@ export OPENAI_API_KEY=YOUR_API_KEY
 
 Use the model identifier and endpoint supplied by your provider. Omit `--base-url`
 for the OpenAI client's default endpoint. The default `prod` profile expects an
-image-capable model; pass `--profile train` for the minimal training setup. Shell
-commands run locally with your OS permissions.
+image-capable model; pass `--profile train` for the minimal prompt. The CLI writes
+a `RunResult` JSON trace to stdout.
 
-The CLI writes a `RunResult` JSON trace to stdout. For installer options, source
-development, task Python, JSON config, compaction, MCP, subagents, and library use,
-see the [usage reference](docs/usage.md).
+See the [usage reference](docs/usage.md) for installer options, task Python, JSON
+config, compaction, MCP, and subagents.
+
+### Use it in your project
+
+Harness is not on PyPI yet. Add it from Git, pinned to a commit, with the `office`
+extra:
+
+```bash
+uv add "feather-harness[office] @ git+https://github.com/paper-instruments/feather-train.git@<full-commit-sha>#subdirectory=feather-harness"
+```
+
+`run_local` runs the same agent as the CLI, with its prompt, tools, skills, and
+profile. You supply the model client:
+
+```python
+import asyncio
+from pathlib import Path
+
+from openai import AsyncOpenAI
+from feather_harness import ChatCompletionsModel, run_local
+
+async def main() -> None:
+    workspace = Path("workspace")
+    workspace.mkdir(exist_ok=True)
+    async with AsyncOpenAI(base_url="http://localhost:8000/v1") as client:
+        model = ChatCompletionsModel(client=client, model="YOUR_MODEL")
+        result = await run_local(
+            "Summarize the documents in this workspace into a briefing.md file.",
+            model=model,
+            workspace=workspace,
+        )
+        print(result.final_answer)
+
+asyncio.run(main())
+```
+
+The agent's shell commands use the Python environment your code runs in, which is
+why the `office` extra goes into your project. To bring your own tools or loop,
+build `FeatherAgent` directly; see [library use](docs/usage.md#library-use).
+
+To modify the harness itself, clone the repository and follow
+[source development](docs/usage.md#source-development).
+
+### Evaluate on Harbor tasks
+
+[`feather-eval`](../feather-eval/README.md) is a Harbor agent adapter. It installs
+Feather into each task's sandbox, runs it against an OpenAI-compatible endpoint, and
+exports the trajectory as ATIF. Harbor manages the sandbox and grading. See its
+[first run](../feather-eval/README.md#first-run) to evaluate a bundled smoke task.
 
 ## Recommended packages
 
