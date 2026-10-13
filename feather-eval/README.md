@@ -66,7 +66,7 @@ Harbor agent `kwargs` also accepts `model_settings` (for example `temperature`,
 its CLI configuration; misspelled model and compaction fields fail before
 installation. The task instruction remains the literal user message, while
 `additional_instructions` extends the selected system prompt. See the Harness
-[CLI configuration reference](../feather-harness/README.md#configuration) for the configuration
+[CLI configuration reference](../feather-harness/docs/usage.md#configuration) for the configuration
 fields and token-count dependencies.
 
 ## Task environment
@@ -109,7 +109,7 @@ These dependencies match the Harness [`office` extra](../feather-harness/pyproje
 Use a virtualenv for distro-managed Python, and remove distro-installed Office
 packages with the system package manager before this step. Add OCR binaries when
 the task needs them; see the Harness
-[system dependency commands](../feather-harness/README.md#install-and-run).
+[system dependency commands](../feather-harness/README.md#recommended-packages).
 
 Graders sharing the task's Python environment also use Paper.
 

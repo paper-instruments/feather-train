@@ -45,7 +45,7 @@ pins are in [pyproject.toml](pyproject.toml).
 Bake `feather-harness[office]`, Bash, ripgrep, and Poppler into the agent container
 before snapshotting. Install optional LibreOffice/OCR tools there when tasks need
 them. Installing packages on the coordinator does not expose them to sandbox tools.
-See the Harness [system dependency commands](../feather-harness/README.md#install-and-run).
+See the Harness [system dependency commands](../feather-harness/README.md#recommended-packages).
 
 ## Reference Tinker training recipe
 
