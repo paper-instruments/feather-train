@@ -139,10 +139,12 @@ full history stays inspectable.
 
 ## Install and run
 
-There are three ways to use Feather:
+There are four ways to use Feather:
 
 - **[Run the CLI](#run-the-cli):** install a standalone `feather` command and run
   tasks against a folder of files. No checkout needed.
+- **[Build from source](#build-from-source):** clone this repository to modify the
+  harness or run it from a checkout.
 - **[Use it in your project](#use-it-in-your-project):** add the harness as a Python
   dependency and call the agent from your own code.
 - **[Evaluate on Harbor tasks](#evaluate-on-harbor-tasks):** run Feather inside
@@ -182,6 +184,24 @@ a `RunResult` JSON trace to stdout.
 See the [usage reference](docs/usage.md) for installer options, task Python, JSON
 config, compaction, MCP, and subagents.
 
+### Build from source
+
+Clone the repository and run the CLI from its uv workspace (Python 3.12+):
+
+```bash
+git clone https://github.com/paper-instruments/feather-train.git
+cd feather-train
+uv sync --package feather-harness --extra office --locked
+mkdir -p workspace
+
+uv run --package feather-harness --extra office --locked feather \
+  --model YOUR_MODEL --workdir ./workspace "Summarize this workspace." > run.json
+```
+
+This uses the repository's `.venv`, so model shell commands see its packages when you
+launch through `uv run`. See [build from source](docs/usage.md#build-from-source) and
+[development](#development) for tests and linting.
+
 ### Use it in your project
 
 Harness is not on PyPI yet. Add it from Git, pinned to a commit, with the `office`
@@ -219,9 +239,6 @@ asyncio.run(main())
 The agent's shell commands use the Python environment your code runs in, which is
 why the `office` extra goes into your project. To bring your own tools or loop,
 build `FeatherAgent` directly; see [library use](docs/usage.md#library-use).
-
-To modify the harness itself, clone the repository and follow
-[source development](docs/usage.md#source-development).
 
 ### Evaluate on Harbor tasks
 

@@ -3,7 +3,9 @@
 Details for installing, configuring, and embedding Feather. The
 [README](../README.md) covers the architecture and a quick start.
 
-## Installer
+## Installation
+
+### Run the CLI
 
 The repository's [installer](../../install.sh) supports macOS and Linux. It requires
 Bash, curl, and Git, and downloads its own uv and managed Python 3.12. Install with:
@@ -72,11 +74,15 @@ If you customized the directories, remove the launcher and installation root at
 those paths instead. Workspace files, skills, and run logs remain in their original
 locations.
 
-## Source development
+### Build from source
 
+To modify the harness or run it from a checkout, use Python 3.12+ and uv:
 
 ```bash
+git clone https://github.com/paper-instruments/feather-train.git
+cd feather-train
 uv sync --package feather-harness --extra office --locked
+mkdir -p workspace
 uv run --package feather-harness --extra office --locked feather \
   --model YOUR_MODEL --workdir ./workspace "Summarize this workspace." > run.json
 ```
