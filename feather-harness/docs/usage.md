@@ -20,7 +20,8 @@ FEATHER_SOURCE_DIR="$PWD" bash install.sh
 
 The installer uses the repository lockfile to install Harness with the `office`
 extra into `~/.local/share/feather/versions/<installation>/venv`. This includes
-`paper-docx`, `paper-pptx`, `paper-xlsx`, and the PDF libraries. Python packages stay
+`paper-docx`, `paper-pptx`, `paper-xlsx`, the PDF libraries, and the data libraries
+listed under [recommended packages](../README.md#recommended-packages). Python packages stay
 in this Feather environment, regardless of the directory or active virtualenv
 from which you install. It does not use system pip, install Train or Eval, require
 sudo, or modify shell profiles.

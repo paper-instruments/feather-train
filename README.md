@@ -32,7 +32,7 @@ FEATHER_SOURCE_DIR="$PWD" bash install.sh
 ```
 
 The installer provisions its own uv and Python 3.12, then installs the CLI, Paper
-document packages, and PDF libraries into a dedicated Feather virtual environment
+document packages, PDF libraries, and data libraries into a dedicated Feather virtual environment
 under `~/.local/share/feather/`. It does not install Python packages into your
 current directory, active environment, or system Python. The launcher at
 `~/.local/bin/feather` sets the execution environment so the model's `python` and

@@ -171,8 +171,9 @@ see the [usage reference](docs/usage.md).
 
 ## Recommended packages
 
-The bundled skills assume these are available in the agent's environment. The
-installer (or the `office` extra) provides the Python packages; system binaries
+The model works best with these available in the agent's environment: the bundled
+skills use some of them, and the model's own task scripts expect the rest. The
+installer (or the `office` extra) provides the Python packages; system packages
 are separate.
 
 **Python** (`office` extra):
@@ -182,28 +183,37 @@ are separate.
 | [`paper-docx`](https://pypi.org/project/paper-docx/) | Word documents (imports as `docx`) |
 | [`paper-pptx`](https://pypi.org/project/paper-pptx/) | PowerPoint presentations (imports as `pptx`) |
 | [`paper-xlsx`](https://pypi.org/project/paper-xlsx/) | Excel workbooks (imports as `openpyxl`) |
-| `reportlab`, `pypdf`, `pdfplumber` | PDF authoring and extraction |
+| `reportlab`, `pypdf`, `pdfplumber`, `pypdfium2` | PDF authoring, extraction, and rendering |
 | `pdf2image`, `Pillow` | Rendering pages to images and resizing images for `read` |
+| `pandas` (2.x), `requests`, `beautifulsoup4`, `lxml` | Data analysis, HTTP, and HTML/XML parsing in task scripts |
 
 The Paper packages are drop-in upgrades of `python-docx`, `python-pptx`, and
 `openpyxl` that add safer edits and inspection. Do not install the upstream
 distributions alongside them.
 
+[`PyMuPDF`](https://pypi.org/project/PyMuPDF/) is also worth installing for PDF
+work, but it is not in the extra because it is AGPL-licensed. Add it yourself if
+its license suits you.
+
 **System** (Debian/Ubuntu shown; on macOS use your package manager):
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y bash ripgrep poppler-utils
-# Optional: Excel recalculation and OCR, respectively.
-sudo apt-get install -y libreoffice-calc tesseract-ocr
+sudo apt-get install -y bash ripgrep poppler-utils libreoffice-calc tesseract-ocr \
+  git jq curl zip unzip fonts-dejavu-core fonts-liberation
 ```
 
-| Binary | Used for |
+| Package | Used for |
 | --- | --- |
 | `bash`, `ripgrep` | Required: the `bash`, `grep`, and `glob` tools |
 | `poppler-utils` | PDF rendering |
-| `libreoffice-calc` | Optional: formula recalculation (`openpyxl.oracle`) |
-| `tesseract-ocr` | Optional: OCR for scanned documents (add the language packs you need) |
+| `libreoffice-calc` | Formula recalculation (`openpyxl.oracle`) |
+| `tesseract-ocr` | OCR for scanned documents (add the language packs you need) |
+| `fonts-dejavu-core`, `fonts-liberation` | Fonts for rendering documents through LibreOffice |
+| `git`, `jq`, `curl`, `zip`, `unzip` | Common command-line tools in task scripts |
+
+Only `bash` and `ripgrep` are strictly required; without the rest, the related
+work fails or renders differently.
 
 ## Development
 

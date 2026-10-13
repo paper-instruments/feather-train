@@ -101,7 +101,8 @@ RUN python -m pip uninstall -y openpyxl python-docx python-pptx \
     && python -m pip install --no-cache-dir --force-reinstall \
        paper-docx==0.2.0 paper-pptx==0.2.0 paper-xlsx==0.2.1 \
        'reportlab>=4,<5' 'pypdf>=6,<7' 'pdfplumber>=0.11,<0.12' \
-       'pdf2image>=1.17,<2' 'Pillow>=10.3,<13' \
+       'pdf2image>=1.17,<2' 'pypdfium2>=5,<6' 'Pillow>=10.3,<13' \
+       'pandas>=2.2,<3' 'requests>=2.32,<3' 'beautifulsoup4>=4.12,<5' 'lxml>=5.3,<7' \
     && paper-docx-doctor && paper-pptx-doctor && paper-xlsx-doctor
 ```
 
