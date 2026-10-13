@@ -119,7 +119,7 @@ print('Paper environment verified')
 def install(environment: dict[str, str], caller: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["bash", str(ROOT / "install.sh")], env=environment, cwd=caller,
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=300, check=False,
     )
     if check and result.returncode:
         raise AssertionError(result.stdout + result.stderr)
