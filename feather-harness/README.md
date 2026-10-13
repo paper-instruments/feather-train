@@ -15,6 +15,29 @@ and PDFs using specialized Paper packages.
 - **Execution traces:** structured results preserve tool interactions and context
   changes for inspection.
 
+## Prompting
+
+Ultramarine was trained with large-scale non-verifiable rewards, so it has stronger
+aesthetic and prose-writing sensibilities than traditional models. Tune your prompts
+carefully to get the most out of it, and test changes on your own tasks.
+
+This harness contains the prompts we've tuned for internal testing. Start with:
+
+- **System prompts:** [`system_prompt.md`](src/feather_harness/system_prompt.md)
+  (`train`) and [`production_prompt.md`](src/feather_harness/production_prompt.md)
+  (`prod`), and how the [two profiles](#two-profiles-train-and-prod) differ.
+- **Tool descriptions:** the originals in [`tools/`](src/feather_harness/tools/) and
+  the production rewrites in
+  [`production_tool_descriptions.json`](src/feather_harness/production_tool_descriptions.json).
+- **Skills:** the format manuals in [`skills/`](src/feather_harness/skills/) and the
+  production guidance and design guide in
+  [`production_skills/`](src/feather_harness/production_skills/).
+- **Compaction prompt:**
+  [`production_compaction_prompt.md`](src/feather_harness/production_compaction_prompt.md).
+
+See [Prompting](https://docs.paperinstruments.com/docs/ultramarine/prompting) in the
+Ultramarine docs for request settings such as reasoning effort and sampling.
+
 ## How it works
 
 The whole harness is a few small pieces. If you want to rebuild it yourself, these
