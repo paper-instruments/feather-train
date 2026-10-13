@@ -1,4 +1,5 @@
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -74,3 +75,39 @@ def test_cli_rejects_invalid_task_python_before_model_request(tmp_path, kind):
     assert completed.returncode == 1
     assert "Task Python must be an existing executable file" in completed.stderr
     assert requests == []
+
+
+@pytest.mark.parametrize("selected", [False, True], ids=["feather_python", "task_python"])
+def test_pip_never_falls_through_to_caller_environment(tmp_path, monkeypatch, selected):
+    caller = tmp_path / "caller bin"
+    caller.mkdir()
+    for name in ("pip", "pip3"):
+        (caller / name).write_text("#!/bin/sh\necho caller pip\n")
+        (caller / name).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{caller}{os.pathsep}{os.environ['PATH']}")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    args = ["--workdir", str(workspace), "--model", "test"]
+    if selected:
+        project = tmp_path / "project env"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(project)], check=True)
+        packages = subprocess.check_output(
+            [str(project / "bin/python"), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            text=True,
+        ).strip()
+        (Path(packages) / "pip.py").write_text("import sys\nprint('pip', sys.prefix)\n")
+        args.extend(("--python", str(project / "bin/python")))
+    command = 'for tool in pip pip3; do "$tool" install demo >> pip.log 2>&1; echo "$tool=$?" >> pip.log; done'
+    with model_server([
+        (200, response(tools=[("bash", {"command": command})])),
+        (200, response("Done.")),
+    ]) as (url, _):
+        completed = cli(tmp_path, *args, "--base-url", url, "Install demo.")
+    assert completed.returncode == 0, completed.stderr
+    log = (workspace / "pip.log").read_text()
+    assert "caller pip" not in log
+    if selected:
+        assert log.splitlines() == [f"pip {project}", "pip=0", f"pip {project}", "pip3=0"]
+    else:
+        assert log.count("pip is unavailable") == 2
+        assert "pip=1" in log and "pip3=1" in log

@@ -15,6 +15,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# The fake model holds its first response while an update runs, so both share one limit.
+INSTALL_TIMEOUT = 300
 
 
 def main() -> None:
@@ -23,7 +25,8 @@ def main() -> None:
         caller = root / "caller project"
         caller.mkdir()
         (caller / "pyproject.toml").write_text('[project]\nname="unrelated"\nversion="0.0.0"\n')
-        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(caller / ".venv")], check=True)
+        # A caller venv with pip catches pip falling through PATH out of Feather's environment.
+        subprocess.run([sys.executable, "-m", "venv", str(caller / ".venv")], check=True)
         project_python = caller / ".venv/bin/python"
         project_packages = subprocess.check_output(
             [str(project_python), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
@@ -85,10 +88,14 @@ pptx.Presentation().save('deck.pptx')
 openpyxl.Workbook().save('sheet.xlsx')
 print('Paper environment verified')
 """
-        command = " && ".join(
-            f"{executable} -c {shlex.quote(program)} {filename}"
-            for executable, filename in (("python", "python.json"), ("python3", "python3.json"))
-        )
+        command = " && ".join([
+            *(
+                f"{executable} -c {shlex.quote(program)} {filename}"
+                for executable, filename in (("python", "python.json"), ("python3", "python3.json"))
+            ),
+            "{ pip install --no-index unrelated-demo || true; }",
+            "{ pip3 install --no-index unrelated-demo || true; }",
+        ])
         with model_server(command) as (endpoint, requests, started, release):
             process = subprocess.Popen(
                 [str(launcher), "--model", "test", "--base-url", endpoint,
@@ -109,6 +116,7 @@ print('Paper environment verified')
         assert result["final_answer"] == "Verified."
         assert len(requests) == 2
         assert "Paper environment verified" in json.dumps(requests[1]["messages"])
+        assert json.dumps(requests[1]["messages"]).count("pip is unavailable") == 2
         assert ".agents/docx/SKILL.md" in requests[0]["messages"][0]["content"]
         for name in ("python.json", "python3.json"):
             evidence = json.loads((workspace / name).read_text())
@@ -136,6 +144,8 @@ print('Project environment verified')
             f"python3 -c {shlex.quote(project_program)} project-python3.json",
             f'"$FEATHER_PYTHON" -c {shlex.quote(program)} paper-python.json',
             '"$FEATHER_PYTHON" -c "import importlib.util; assert importlib.util.find_spec(\'project_only\') is None"',
+            "pip --version > project-pip.txt",
+            "pip3 --version > project-pip3.txt",
         ])
         with model_server(command) as (endpoint, override_requests, _, release):
             release.set()
@@ -155,6 +165,10 @@ print('Project environment verified')
         for name in ("project-python.json", "project-python3.json"):
             assert Path(json.loads((workspace / name).read_text())["prefix"]).resolve() == (caller / ".venv").resolve()
         assert Path(json.loads((workspace / "paper-python.json").read_text())["prefix"]).resolve() == selected / "venv"
+        for name in ("project-pip.txt", "project-pip3.txt"):
+            # pip --version reports "pip X from <site-packages>/pip (python X.Y)".
+            location = (workspace / name).read_text().split(" from ", 1)[1].rsplit(" (python", 1)[0]
+            assert Path(location).resolve().is_relative_to((caller / ".venv").resolve())
         assert set(caller.rglob("*")) == before, "Running Feather changed the unrelated project"
         print("Installer verified: isolated packages, updates, default and overridden task Python, Paper routing.")
 
@@ -162,7 +176,7 @@ print('Project environment verified')
 def install(environment: dict[str, str], caller: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["bash", str(ROOT / "install.sh")], env=environment, cwd=caller,
-        capture_output=True, text=True, timeout=300, check=False,
+        capture_output=True, text=True, timeout=INSTALL_TIMEOUT, check=False,
     )
     if check and result.returncode:
         raise AssertionError(result.stdout + result.stderr)
@@ -183,7 +197,7 @@ def model_server(command: str):
             finish = "stop"
             if len(requests) == 1:
                 started.set()
-                if not release.wait(60):
+                if not release.wait(INSTALL_TIMEOUT + 30):
                     raise TimeoutError("Update check did not release the model response")
                 delta = {"role": "assistant", "tool_calls": [{
                     "index": 0, "id": "environment-check", "type": "function",

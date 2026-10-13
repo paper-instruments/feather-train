@@ -121,19 +121,32 @@ class LocalShellRuntime:
 def _task_environment(task_python: Path | None) -> Iterator[dict[str, str]]:
     environment = {**os.environ, "FEATHER_PYTHON": sys.executable}
     if task_python is None:
-        yield environment
-        return
-    for name in ("PYTHONHOME", "PYTHONPATH", "PYTHONNOUSERSITE", "VIRTUAL_ENV"):
-        environment.pop(name, None)
-    if (task_python.parent.parent / "pyvenv.cfg").is_file():
-        environment["VIRTUAL_ENV"] = str(task_python.parent.parent)
-    with tempfile.TemporaryDirectory(prefix="feather-task-python-") as aliases:
+        # python resolves to Feather's runtime, which has no pip. Without these shims,
+        # pip would fall through PATH and install into the caller's environment.
+        shims = dict.fromkeys(("pip", "pip3"), _PIP_UNAVAILABLE)
+    else:
+        for name in ("PYTHONHOME", "PYTHONPATH", "PYTHONNOUSERSITE", "VIRTUAL_ENV"):
+            environment.pop(name, None)
+        if (task_python.parent.parent / "pyvenv.cfg").is_file():
+            environment["VIRTUAL_ENV"] = str(task_python.parent.parent)
         # Preserve the selected executable's venv path, even when it is a symlink.
-        for name in ("python", "python3"):
+        python = f"exec {shlex.quote(str(task_python))}"
+        shims = {
+            "python": f'{python} "$@"', "python3": f'{python} "$@"',
+            "pip": f'{python} -m pip "$@"', "pip3": f'{python} -m pip "$@"',
+        }
+    with tempfile.TemporaryDirectory(prefix="feather-task-commands-") as aliases:
+        for name, body in shims.items():
             shim = Path(aliases) / name
-            shim.write_text(f'#!/bin/sh\nexec {shlex.quote(str(task_python))} "$@"\n')
+            shim.write_text(f"#!/bin/sh\n{body}\n")
             shim.chmod(0o700)
-        environment["PATH"] = os.pathsep.join(
-            (aliases, str(task_python.parent), environment.get("PATH", ""))
-        )
+        selected = () if task_python is None else (str(task_python.parent),)
+        environment["PATH"] = os.pathsep.join((aliases, *selected, environment.get("PATH", "")))
         yield environment
+
+
+_PIP_UNAVAILABLE = (
+    "echo 'pip is unavailable: Feather keeps its Python private. Restart Feather with "
+    "--python <project interpreter> to install packages into a project environment.' >&2\n"
+    "exit 1"
+)
