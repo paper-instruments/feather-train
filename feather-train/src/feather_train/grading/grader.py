@@ -98,7 +98,7 @@ class GradingConfig(BaseModel):
     judge_retry_max_backoff_seconds: float = Field(30.0, ge=0.0)
     # Trajectory conversion and staging scale with rollout length; graders opt in explicitly.
     stage_agent_trace: bool = False
-    # Observatory runs set this explicitly so the immutable run receipt names
+    # Evaluation runs set this explicitly so the immutable run receipt names
     # the exact model invoked by the portable grader. Legacy benchmark runs may
     # omit it and retain the grader archive's default.
     judge_model: str | None = Field(default=None, min_length=1, max_length=500)

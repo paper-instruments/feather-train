@@ -89,10 +89,6 @@ harness dependency resolves to this repository. Omit packages you do not use.
 Choose Train's `verifiers`, `tinker`, or `training` extra for the integration you
 need. Commit the consumer's lockfile to preserve the resolved revisions.
 
-Source and verification records for the package sync are in
-[Harness parity](docs/plans/harness-train-stack-parity/parity-audit.md) and
-[Train and Eval parity](docs/plans/integration-train-stack-parity/spec.md).
-
 ## Development
 
 From this workspace directory:

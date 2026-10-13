@@ -116,7 +116,7 @@ and the Harbor metadata record whether a recovery happened.
 
 ## Task-runner guidance
 
-Production prose follows the Train PR 636 stack's task-runner adaptation. It omits
+Production prose is written for noninteractive task runs. It omits
 instructions that assume a live interaction channel, including clarification questions,
 live status updates, and approval workflows. The default system prompt has no host
 capability section. Hosts may explicitly supply `host_facts` and `vision_fact` (or
