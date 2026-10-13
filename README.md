@@ -19,15 +19,13 @@ manages their development dependencies and lockfile.
 ## Run Feather locally
 
 The [installer](install.sh) supports macOS and Linux and requires Bash, curl, and
-Git. Once the script is merged and this repository is accessible publicly, install
-with:
+Git. Install with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/paper-instruments/feather-train/main/install.sh | bash
 ```
 
-While this repository is private or the script is only in a PR, use an authenticated
-checkout containing the script. From that checkout:
+To install from a local checkout, run from its root:
 
 ```bash
 FEATHER_SOURCE_DIR="$PWD" bash install.sh
@@ -38,7 +36,7 @@ document packages, and PDF libraries into a dedicated Feather virtual environmen
 under `~/.local/share/feather/`. It does not install Python packages into your
 current directory, active environment, or system Python. The launcher at
 `~/.local/bin/feather` sets the execution environment so the model's `python` and
-`python3` shell commands use those installed packages. No activation is needed.
+`python3` shell commands use those installed packages by default. No activation is needed.
 If `~/.local/bin` is not on your `PATH`, invoke `~/.local/bin/feather` directly or
 add that directory to `PATH` yourself; the installer does not edit shell profiles.
 
@@ -61,6 +59,12 @@ agent's execution trace. The model identifier and endpoint come from your provid
 omit `--base-url` for the OpenAI client's default endpoint. Shell tools run with
 your OS permissions. Running Feather creates skill and log directories inside the
 selected workspace.
+
+To use a project's Python for task commands, pass
+`--python /absolute/path/to/project/.venv/bin/python` or set `python` in the JSON
+configuration. Feather keeps its own runtime environment. Task shell commands
+can use `"$FEATHER_PYTHON"` to access the bundled Paper packages. See
+[task Python selection](feather-harness/README.md#task-python) for examples.
 
 For evaluation, follow the [Harbor example](feather-eval/README.md#first-run).
 For training, start with [Feather Train](feather-train/README.md): it takes task

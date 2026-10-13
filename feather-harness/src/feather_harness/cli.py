@@ -29,6 +29,7 @@ class LocalConfig(FrozenModel):
     model: str = Field(min_length=1)
     base_url: str | None = None
     workspace: Path = Path(".")
+    python: Path | None = None
     profile: Profile = "prod"
     enable_image_tools: bool | None = None
     enable_web_tools: bool = False
@@ -69,6 +70,7 @@ async def run(config: LocalConfig, prompt: str) -> int:
                     retry=config.model_retry,
                 ),
                 workspace=config.workspace,
+                task_python=config.python,
                 max_turns=config.max_turns,
                 model_settings=config.model_settings,
                 compaction=config.compaction,
@@ -104,6 +106,10 @@ def main() -> int:
         help="Existing workspace directory (default: current directory).",
     )
     parser.add_argument("--max-turns", type=int, help="Maximum agent turns (default: 100).")
+    parser.add_argument(
+        "--python", type=Path,
+        help="Python executable for task shell commands; Feather keeps its own runtime.",
+    )
     parser.add_argument("--profile", choices=("train", "prod"), help="Startup profile (default: prod).")
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -111,7 +117,7 @@ def main() -> int:
         values = json.loads(args.config.read_text()) if args.config else {}
         overrides = {
             name: getattr(args, name)
-            for name in ("model", "base_url", "workspace", "max_turns", "profile")
+            for name in ("model", "base_url", "workspace", "python", "max_turns", "profile")
             if getattr(args, name) is not None
         }
         config = LocalConfig.model_validate({**values, **overrides})

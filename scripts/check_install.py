@@ -24,6 +24,12 @@ def main() -> None:
         caller.mkdir()
         (caller / "pyproject.toml").write_text('[project]\nname="unrelated"\nversion="0.0.0"\n')
         subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(caller / ".venv")], check=True)
+        project_python = caller / ".venv/bin/python"
+        project_packages = subprocess.check_output(
+            [str(project_python), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            text=True,
+        ).strip()
+        (Path(project_packages) / "project_only.py").write_text("VALUE = 'project dependency'\n")
         poison = caller / "foreign packages"
         poison.mkdir()
         (poison / "docx.py").write_text('raise AssertionError("Caller Python leaked into Feather")\n')
@@ -40,6 +46,7 @@ def main() -> None:
             "UV_PROJECT": str(caller),
             "PYTHONPATH": str(poison),
             "PYTHONHOME": str(poison),
+            "PYTHONDONTWRITEBYTECODE": "1",
             "PATH": str(caller / ".venv/bin") + os.pathsep + os.environ["PATH"],
         }
         install(environment, caller)
@@ -112,8 +119,44 @@ print('Paper environment verified')
         for name, member in (("brief.docx", "word/document.xml"), ("deck.pptx", "ppt/presentation.xml"), ("sheet.xlsx", "xl/workbook.xml")):
             with zipfile.ZipFile(workspace / name) as archive:
                 assert member in archive.namelist()
+
+        # Install the working checkout so the override check includes uncommitted CLI changes.
+        install(environment, caller)
+        selected = (install_root / "current").resolve()
+        project_program = """
+import json, sys, importlib.util, project_only
+from pathlib import Path
+assert project_only.VALUE == 'project dependency'
+assert importlib.util.find_spec('docx') is None
+Path(sys.argv[1]).write_text(json.dumps({'prefix': sys.prefix}))
+print('Project environment verified')
+"""
+        command = " && ".join([
+            f"python -c {shlex.quote(project_program)} project-python.json",
+            f"python3 -c {shlex.quote(project_program)} project-python3.json",
+            f'"$FEATHER_PYTHON" -c {shlex.quote(program)} paper-python.json',
+            '"$FEATHER_PYTHON" -c "import importlib.util; assert importlib.util.find_spec(\'project_only\') is None"',
+        ])
+        with model_server(command) as (endpoint, override_requests, _, release):
+            release.set()
+            overridden = subprocess.run(
+                [str(launcher), "--model", "test", "--base-url", endpoint,
+                 "--workdir", str(workspace), "--python", str(project_python),
+                 "Check project packages and create Office documents."],
+                env={**environment, "OPENAI_API_KEY": "synthetic-test-key"},
+                cwd=caller, capture_output=True, text=True, timeout=60, check=False,
+            )
+        assert overridden.returncode == 0, overridden.stderr
+        assert json.loads(overridden.stdout)["final_answer"] == "Verified."
+        assert len(override_requests) == 2
+        assert override_requests[0]["messages"][0] == requests[0]["messages"][0]
+        bash = next(tool for tool in override_requests[0]["tools"] if tool["function"]["name"] == "bash")
+        assert "$FEATHER_PYTHON" in bash["function"]["description"]
+        for name in ("project-python.json", "project-python3.json"):
+            assert Path(json.loads((workspace / name).read_text())["prefix"]).resolve() == (caller / ".venv").resolve()
+        assert Path(json.loads((workspace / "paper-python.json").read_text())["prefix"]).resolve() == selected / "venv"
         assert set(caller.rglob("*")) == before, "Running Feather changed the unrelated project"
-        print("Installer verified: isolated packages, local/remote sources, updates, failure recovery, real Python/Paper tool execution.")
+        print("Installer verified: isolated packages, updates, default and overridden task Python, Paper routing.")
 
 
 def install(environment: dict[str, str], caller: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:

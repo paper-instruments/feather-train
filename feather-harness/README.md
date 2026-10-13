@@ -18,15 +18,13 @@ and PDFs using specialized Paper packages.
 ## Install and run
 
 The repository's [installer](../install.sh) supports macOS and Linux. It requires
-Bash, curl, and Git, and downloads its own uv and managed Python 3.12. Once the
-script is merged and the repository is publicly accessible:
+Bash, curl, and Git, and downloads its own uv and managed Python 3.12. Install with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/paper-instruments/feather-train/main/install.sh | bash
 ```
 
-For the current private repository or an unmerged installer PR, use an authenticated
-checkout containing the script and run from the repository root:
+To install from a local checkout, run from the repository root:
 
 ```bash
 FEATHER_SOURCE_DIR="$PWD" bash install.sh
@@ -41,8 +39,8 @@ sudo, or modify shell profiles.
 
 The launcher at `~/.local/bin/feather` sets `VIRTUAL_ENV` and puts Feather's virtualenv
 first on `PATH`. It clears inherited `PYTHONHOME` and `PYTHONPATH` and disables
-user-site packages. Both the CLI and the model's `python` and `python3` shell
-commands therefore use Feather's packages without activating an environment.
+user-site packages. By default, both the CLI and the model's `python` and `python3`
+shell commands use Feather's packages without activating an environment.
 If `~/.local/bin` is not on `PATH`, use the full launcher path below or add that
 directory yourself.
 
@@ -115,6 +113,40 @@ uv run --package feather-harness --extra office --locked feather \
 This source workflow uses the repository's `.venv`. Use `uv run` or activate it so
 model shell commands see its packages. Harness is not currently published on PyPI;
 library consumers should use the [pinned Git source configuration](../README.md#use-the-packages-from-another-repository).
+
+### Task Python
+
+Use `--python` to select an existing interpreter for the model's task commands:
+
+```bash
+~/.local/bin/feather --model YOUR_MODEL \
+  --python /absolute/path/to/project/.venv/bin/python \
+  --workdir /absolute/path/to/project "Analyze this project's data." > run.json
+```
+
+The optional JSON configuration field `python` accepts the same path. Relative
+paths resolve from the directory where you launch Feather, not `--workdir`.
+Without an override, the installed CLI uses Feather's environment for task Python.
+
+With an override, bare `python` and `python3` both invoke exactly the selected
+interpreter, and its directory is added to the task's `PATH` for project console
+tools. Feather's CLI and internal workers continue using its own runtime. The
+override does not install packages into your selected environment or combine its
+site-packages with Feather's.
+
+The task shell exposes `FEATHER_PYTHON`, which points to Feather's interpreter.
+For example, model shell commands can use each environment explicitly:
+
+```bash
+python analyze_project.py
+"$FEATHER_PYTHON" create_deck.py
+```
+
+The first command uses your selected project's dependencies; the second uses the
+bundled Paper packages. A script that needs dependencies from both environments
+must have them installed together in one environment or split the work into
+separate commands. A short Bash tool description explains the interpreter choice
+to the model; selecting task Python does not change the system prompt or skills.
 
 ## Configuration
 

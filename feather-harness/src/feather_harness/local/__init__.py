@@ -5,6 +5,7 @@ import json
 import logging
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 from ..core.compaction import CompactionConfig
@@ -40,6 +41,7 @@ async def run_local(
     *,
     model: ChatCompletionsModel,
     workspace: Path,
+    task_python: Path | None = None,
     max_turns: int = 100,
     model_settings: ModelSettings = ModelSettings(),
     compaction: CompactionConfig = CompactionConfig(),
@@ -107,6 +109,7 @@ async def run_local(
             serve,
             model=model,
             workspace=workspace,
+            task_python=task_python,
             state_directory=workspace / ".feather/agents" / agent_id,
             compaction=compaction,
             mcp_servers=mcp_servers,
@@ -158,6 +161,7 @@ async def run_local(
         run_parent,
         model=model,
         workspace=workspace,
+        task_python=task_python,
         state_directory=workspace / ".feather",
         compaction=compaction,
         mcp_servers=mcp_servers,
@@ -178,6 +182,7 @@ async def _with_local_agent(
     mcp_servers: tuple[McpServerSpec, ...],
     profile: Profile,
     enable_image_tools: bool,
+    task_python: Path | None = None,
     agents: Subagents | None = None,
     web_provider: WebProvider | None = None,
 ) -> RunResult:
@@ -191,7 +196,9 @@ async def _with_local_agent(
     async def publish_transcript(content: str) -> None:
         await asyncio.to_thread(save_transcript, state_directory / "transcript.jsonl", content)
 
-    async with LocalShellRuntime(workspace, log_directory=state_directory / "tasks") as transport:
+    async with LocalShellRuntime(
+        workspace, log_directory=state_directory / "tasks", task_python=task_python,
+    ) as transport:
         processes = ProcessTools(transport)
         builtins = (
             processes.bash_tool(),
@@ -209,6 +216,15 @@ async def _with_local_agent(
             builtins = (*builtins, web_search_tool(web_provider), web_fetch_tool(web_provider))
         if profile == "prod":
             builtins = production_tools(builtins, image_reads=enable_image_tools)
+        if task_python is not None:
+            builtins = tuple(
+                replace(tool, spec=tool.spec.model_copy(update={
+                    "description": tool.spec.description +
+                    ' python and python3 use the selected task Python. Use "$FEATHER_PYTHON" '
+                    'for Paper packages installed with Feather.',
+                })) if tool.spec.name == "bash" else tool
+                for tool in builtins
+            )
         if agents is not None:
             builtins = (*builtins, *subagent_tools(agents))
 

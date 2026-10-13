@@ -11,3 +11,10 @@ The user explicitly authorized implementation and a new stacked PR on #11; no ad
 - [x] Integration verification and CI
 - [x] READMEs
 - [x] Review, simplify, verification and publication
+
+Follow-up task list:
+
+- [x] Add task Python selection and shell environment routing.
+- [x] Cover CLI/config precedence, invalid interpreters, exact executable selection and installed dual-environment execution.
+- [x] Update READMEs and remove private/unmerged installation language.
+- [x] Review/simplify, verify and append a scoped commit to PR #12.
