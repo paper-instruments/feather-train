@@ -76,10 +76,21 @@ else
     git -C "$source_dir" checkout -q --detach FETCH_HEAD
 fi
 [[ -f "$source_dir/uv.lock" && -f "$source_dir/feather-harness/pyproject.toml" ]] || fail 'Source must be a Feather workspace checkout with uv.lock.'
+# A local checkout may belong to another user, such as a Docker mount; this read-only
+# probe must not trip safe.directory. Read it before syncing so a bad source fails early.
+revision=$(git -c safe.directory='*' -C "$source_dir" rev-parse HEAD)
 export UV_PROJECT_ENVIRONMENT="$version_dir/venv"
 "$uv_bin" sync --project "$source_dir" --no-config --locked --no-editable \
     --no-dev --no-default-groups --package feather-harness --extra office \
     --python 3.12 --managed-python
+# The launcher puts this directory first on PATH, so python is Feather's pip-less runtime.
+# Without these stubs, a task's bare pip would install into the caller's environment.
+for name in pip pip3; do
+    printf '%s\n' '#!/bin/sh' \
+        "echo 'pip is unavailable: Feather keeps its Python private. Restart Feather with --python <project interpreter> to install packages into a project environment.' >&2" \
+        'exit 1' > "$version_dir/venv/bin/$name"
+    chmod 755 "$version_dir/venv/bin/$name"
+done
 "$version_dir/venv/bin/python" -I - <<'PY'
 from importlib.metadata import version
 import docx, pptx, openpyxl
@@ -87,7 +98,6 @@ for name in ("feather-harness", "paper-docx", "paper-pptx", "paper-xlsx"):
     print(f"Installed {name} {version(name)}")
 PY
 "$version_dir/venv/bin/python" -I -m feather_harness --help >/dev/null
-revision=$(git -C "$source_dir" rev-parse HEAD)
 printf '%s\n' "$revision" > "$version_dir/source-revision"
 
 {
