@@ -108,8 +108,9 @@ extra. Install it separately with `uv sync --package feather-harness --extra
 token-count --extra dev --locked` when using exact GLM prompt budgets.
 
 The package READMEs contain their test and lint commands. Run their pytest suites
-separately because each has its own configuration. See [AGENTS.md](AGENTS.md) for
-code quality and contribution guidance.
+separately because each has its own configuration. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup and pull request guidance, and
+[AGENTS.md](AGENTS.md) for the code quality conventions.
 
 CI runs Linux lint and package tests, Docker integration tests, and clean
 installation checks for the built distributions. Windows CI also checks file-tool portability. These checks need no cloud credentials.
