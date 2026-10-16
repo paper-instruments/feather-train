@@ -4,6 +4,7 @@ import sys
 
 from feather_harness import (
     AssistantMessage,
+    ProviderUsage,
     RunResult,
     SystemMessage,
     ToolCall,
@@ -204,6 +205,42 @@ def test_failed_summary_is_recorded_but_never_becomes_grader_answer():
     assert len(linked["trajectory.summarization-1.json"].steps) == 1
     flat = to_atif(result, agent=AGENT, session_id="run", grader=True)["trajectory.json"]
     assert [step.message for step in flat.steps] == ["task", "Actual answer"]
+
+
+def test_grader_trajectory_preserves_execution_and_total_usage():
+    result = RunResult(
+        stop_reason="completed",
+        num_turns=2,
+        compactions=1,
+        segments=(
+            TraceSegment(
+                kind="execution",
+                input=(UserMessage(content="task"),),
+                messages=(AssistantMessage(content="First answer"),),
+                calls=(ProviderUsage(kind="agent", usage={"prompt_tokens": 10}),),
+            ),
+            TraceSegment(
+                kind="compaction",
+                input=(UserMessage(content="Summarize"),),
+                messages=(AssistantMessage(content="summary"),),
+                calls=(ProviderUsage(kind="compaction", usage={"prompt_tokens": 20}),),
+            ),
+            TraceSegment(
+                kind="execution",
+                input=(UserMessage(content="summary"),),
+                messages=(AssistantMessage(content="Final answer"),),
+                calls=(ProviderUsage(kind="agent", usage={"prompt_tokens": 30}),),
+            ),
+        ),
+    )
+
+    trajectory = to_atif(result, agent=AGENT, session_id="run", grader=True)["trajectory.json"]
+
+    produced = [step for step in trajectory.steps if step.source == "agent"]
+    assert [step.metrics.prompt_tokens for step in produced] == [10, 30]
+    assert [step.llm_call_count for step in produced] == [1, 1]
+    assert trajectory.final_metrics.total_prompt_tokens == 60
+    assert trajectory.final_metrics.extra["model_calls"] == 3
 
 
 def test_cli_converts_train_evidence_into_one_grader_trajectory(tmp_path):

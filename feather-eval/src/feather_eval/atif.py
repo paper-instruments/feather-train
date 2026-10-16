@@ -33,11 +33,20 @@ def to_atif(
     deliberately excludes summaries and copied context; it is not a model-input export.
     """
     if grader:
+        steps = _steps(result.execution_messages())
+        calls = tuple(
+            call
+            for segment in result.segments
+            if segment.kind == "execution"
+            for call in segment.calls
+        )
+        _attach_usage(steps, calls)
         return {
             "trajectory.json": Trajectory(
                 session_id=session_id,
                 agent=agent,
-                steps=_steps(result.execution_messages()),
+                steps=steps,
+                final_metrics=_final_metrics(result.usage()),
             )
         }
     trajectories: dict[str, Trajectory] = {}
