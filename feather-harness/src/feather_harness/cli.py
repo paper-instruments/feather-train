@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from openai import AsyncOpenAI
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .core.compaction import CompactionConfig
 from .core.messages import FrozenModel
@@ -43,6 +43,13 @@ class LocalConfig(FrozenModel):
     subagents: SubagentConfig | None = None
     additional_instructions: str | None = None
     eval_prompt_output: Path | None = None
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("model must contain non-whitespace characters")
+        return value
 
     @model_validator(mode="after")
     def validate_subagent_profile(self) -> "LocalConfig":
