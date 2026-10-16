@@ -11,7 +11,7 @@ from typing import Literal
 import httpx
 from openai import APIConnectionError, APIStatusError
 from openai.types.chat import ChatCompletion
-from pydantic import Field, JsonValue
+from pydantic import Field, JsonValue, model_validator
 
 from ..tools import ToolSpec
 from .messages import (
@@ -180,6 +180,12 @@ class RetryPolicy(FrozenModel):
     base_backoff_seconds: float = Field(default=2.0, ge=0)
     max_backoff_seconds: float = Field(default=30.0, ge=0)
 
+    @model_validator(mode="after")
+    def ordered_backoff(self) -> RetryPolicy:
+        if self.max_backoff_seconds < self.base_backoff_seconds:
+            raise ValueError("max_backoff_seconds must be >= base_backoff_seconds")
+        return self
+
 
 class TruncatedStreamError(RuntimeError):
     """The provider closed a stream before sending a finish reason."""
@@ -327,7 +333,10 @@ class ChatCompletionsModel:
                     status is not None and status not in _RETRYABLE_STATUS_CODES
                 ):
                     raise
-                delay = backoff * (0.5 + random.random())
+                delay = min(
+                    backoff * (0.5 + random.random()),
+                    self.retry.max_backoff_seconds,
+                )
                 retry_after = _retry_after_seconds(exc)
                 if retry_after is not None:
                     delay = max(delay, min(retry_after, self.retry.max_backoff_seconds))

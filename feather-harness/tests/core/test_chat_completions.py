@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+from pydantic import ValidationError
 
 from feather_harness import (
     AgentRunError,
@@ -293,6 +294,47 @@ async def test_transient_failures_are_retried_and_client_errors_are_not():
         with pytest.raises(APIStatusError):
             await model.complete([UserMessage(content="task")], settings=ModelSettings())
     assert len(requests) == 4
+
+
+def test_retry_policy_requires_ordered_backoff_bounds():
+    with pytest.raises(ValidationError, match="max_backoff_seconds must be >="):
+        RetryPolicy(base_backoff_seconds=2, max_backoff_seconds=1)
+
+
+async def test_retry_delay_does_not_exceed_maximum(monkeypatch):
+    replies = [
+        httpx.Response(
+            503, headers={"retry-after": "100"}, json={"error": {"message": "scaling up"}}
+        ),
+        _sse(_delta(content="done", finish_reason="stop")),
+    ]
+    requests = []
+    delays = []
+
+    async def respond(req):
+        requests.append(req)
+        return replies[len(requests) - 1]
+
+    async def sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr("feather_harness.core.model.random.random", lambda: 1.0)
+    monkeypatch.setattr("feather_harness.core.model.asyncio.sleep", sleep)
+    async with AsyncOpenAI(
+        api_key="test",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        model = ChatCompletionsModel(
+            client=client,
+            model="model",
+            stream=True,
+            retry=RetryPolicy(max_attempts=2, base_backoff_seconds=2, max_backoff_seconds=2),
+        )
+        result = await model.complete([UserMessage(content="task")], settings=ModelSettings())
+
+    assert result.assistant.content == "done"
+    assert delays == [2]
 
 
 async def test_stream_ending_in_provider_error_is_retried():
