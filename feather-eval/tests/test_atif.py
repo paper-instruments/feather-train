@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from importlib.metadata import version
 
 from feather_harness import (
     AssistantMessage,
@@ -18,6 +19,19 @@ from harbor.utils.traces_utils import collect_conversations_from_trial, collect_
 from feather_eval.atif import to_atif, write_atif
 
 AGENT = Agent(name="feather", version="test", model_name="test-model")
+
+
+def test_cli_reports_installed_version_without_conversion_arguments():
+    completed = subprocess.run(
+        [sys.executable, "-m", "feather_eval.atif", "--version"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout == f"feather-atif {version('feather-eval')}\n"
+    assert completed.stderr == ""
 
 
 def test_tool_results_stay_with_their_calls_and_partial_calls_stay_unfinished():

@@ -10,6 +10,7 @@ import threading
 import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.metadata import version
 
 import pytest
 from openai import AsyncOpenAI
@@ -109,6 +110,14 @@ def cli(workspace, *args, input=None):
         text=True,
         timeout=15,
     )
+
+
+def test_cli_reports_installed_version_without_a_prompt(tmp_path):
+    completed = cli(tmp_path, "--version")
+
+    assert completed.returncode == 0
+    assert completed.stdout == f"feather {version('feather-harness')}\n"
+    assert completed.stderr == ""
 
 
 def test_cli_runs_coding_task_through_http_and_real_tools(tmp_path):
