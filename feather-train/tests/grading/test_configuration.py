@@ -3,10 +3,35 @@
 import shlex
 
 import pytest
+from pydantic import ValidationError
 
 from feather_train.grading.grader import GradingConfig, grade_task
 
 from .helpers import GraderSandbox, task
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("poll_timeout", 0),
+        ("poll_timeout", -1),
+        ("poll_timeout", float("nan")),
+        ("poll_timeout", float("inf")),
+        ("judge_retry_backoff_seconds", float("inf")),
+        ("judge_retry_max_backoff_seconds", float("inf")),
+    ],
+)
+def test_grading_timing_values_must_be_finite_and_positive_where_required(field, value):
+    with pytest.raises(ValidationError):
+        GradingConfig.model_validate({field: value})
+
+
+def test_grading_retry_backoff_bounds_must_be_ordered():
+    with pytest.raises(ValidationError, match="judge_retry_max_backoff_seconds must be >="):
+        GradingConfig(
+            judge_retry_backoff_seconds=10,
+            judge_retry_max_backoff_seconds=1,
+        )
 
 
 @pytest.mark.parametrize(
