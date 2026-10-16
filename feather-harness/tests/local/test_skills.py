@@ -1,10 +1,50 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from feather_harness.local import install_skills
 from feather_harness.prompt import SKILLS_ROOT
-from feather_harness.scripts.install_skills import install_task_skills
+from feather_harness.scripts.install_skills import (
+    BUNDLE_ROOT,
+    install_production_skill_tree,
+    install_production_skills,
+    install_task_skills,
+)
+
+
+@pytest.mark.parametrize("host_owned", [False, True])
+def test_production_guidance_remains_utf8_with_a_windows_default_encoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host_owned: bool
+) -> None:
+    original_read_text = Path.read_text
+
+    def windows_read_text(
+        self: Path, encoding: str | None = None, errors: str | None = None
+    ) -> str:
+        return original_read_text(self, encoding=encoding or "cp1252", errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", windows_read_text)
+    workspace = tmp_path / "Résumé – 工作"
+    root = workspace if host_owned else workspace / ".agents"
+    skills_path = root.as_posix() if host_owned else ".agents"
+    if host_owned:
+        install_production_skill_tree(root)
+    else:
+        install_skills(workspace)
+        install_production_skills(workspace)
+
+    for guide in (BUNDLE_ROOT / "production_skills").glob("*.md"):
+        guidance = guide.read_text(encoding="utf-8").replace(".agents/", f"{skills_path}/")
+        if guide.name == "design.md":
+            installed = root / guide.name
+            expected = guidance.encode("utf-8")
+        else:
+            installed = root / guide.stem / "SKILL.md"
+            manual = (SKILLS_ROOT / guide.stem / "SKILL.md").read_bytes()
+            expected = manual.rstrip(b"\n") + b"\n\n" + guidance.encode("utf-8")
+        assert installed.read_bytes() == expected
 
 
 def test_install_skills_preserves_complete_tree_and_accepts_repeat_install(tmp_path):
