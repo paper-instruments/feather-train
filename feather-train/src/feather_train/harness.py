@@ -124,6 +124,11 @@ class FeatherHarnessConfig(vf.HarnessConfig):
                 or any(part in {".agents", ".feather"} for part in root.parts)
             ):
                 raise ValueError("capture_paths must stay under /filesystem outside runtime directories")
+        roots = tuple(PurePosixPath(path) for path in self.capture_paths)
+        for index, root in enumerate(roots):
+            for previous in roots[:index]:
+                if root.is_relative_to(previous) or previous.is_relative_to(root):
+                    raise ValueError("capture_paths must not overlap")
         if not self.capture_output_dir.strip():
             raise ValueError("capture_output_dir must not be empty")
         return self
