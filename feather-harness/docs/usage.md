@@ -145,9 +145,19 @@ cat task.txt | ~/.local/bin/feather --config config.json - > run.json
 ```
 
 CLI flags override matching config fields. The workspace must already exist. Choose
-an actual model-supported context window; compaction is disabled unless enabled.
+a harness context budget within the model's supported window; compaction is
+disabled unless enabled, including with `profile: prod`.
 See [LocalConfig](../src/feather_harness/cli.py)
 and [tool configuration](tools.md) for the full interfaces.
+
+For Ultramarine, see the [evaluation reference](evaluation.md#sampling-and-context)
+for the verified 131,072-token harness budget, 101,072-token compaction trigger,
+and two retained turns. Its requested execution and summary output ceilings are
+both 131,072 tokens and require serving support. Set `model_settings.max_tokens`
+and `compaction.max_tokens` independently to supported values; the default
+summary cap is 65,536. A pinned `prompt_token_budget` clamps output to remaining
+context room but does not establish the serving pool's output limit. See
+[maximum output](evaluation.md#maximum-output) before copying those eval settings.
 
 The default `prod` profile adds professional knowledge-work instructions, professional
 guidance inside the bundled format skills, a shared design guide, and ordinary image

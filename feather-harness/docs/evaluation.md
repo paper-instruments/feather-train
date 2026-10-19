@@ -3,7 +3,11 @@
 Use the [Harbor configuration](../../feather-eval/examples/ultramarine.yaml) as
 an explicit starting condition for knowledge-work evaluations. It selects the
 production prompts, image tools, max reasoning, sampling, and context compaction
-used in our S30 evaluations. It starts with the bundled file-tool smoke task,
+used in our S30 evaluations, as introduced in
+[PR #37](https://github.com/paper-instruments/feather-train/pull/37).
+Confirm that your serving configuration supports the requested output ceilings;
+otherwise lower both caps as described under [maximum output](#maximum-output)
+before running it. It starts with the bundled file-tool smoke task,
 one attempt, and one concurrent trial. The smoke task is an integration check,
 not a scored benchmark or a test of long-context compaction.
 
@@ -73,8 +77,9 @@ Python environment and these packages in addition to the skills' instructions.
 | Image reads / web tools | Enabled / enabled |
 | Harness context budget | 131,072 tokens |
 | Compaction trigger | 101,072 estimated tokens |
+| Minimum turns before compaction | 0 |
 | Recent turns retained | 2 |
-| Execution / compaction output ceilings | 131,072 / 131,072 tokens |
+| Requested execution / compaction output ceilings | 131,072 / 131,072 tokens |
 | Turn limit | 500 |
 
 Compaction must be enabled explicitly in Harbor, the CLI, and `run_local`.
@@ -91,8 +96,18 @@ access to download that processor. This 131K harness budget deliberately compact
 earlier than the public deployment's 262,144-token total window. Changing the
 compaction window does not change the deployment's actual limit.
 
-All output limits include reasoning and answer/tool tokens together. Execution
-and summary limits are separate settings. Max reasoning can increase latency and can
+## Maximum output
+
+The reference requests `model_settings.max_tokens: 131072` for execution and
+`compaction.max_tokens: 131072` for summaries. These are independent evaluation
+ceilings, not generally supported production limits. The public API URL in the
+example does not establish that every serving pool accepts those values. Use
+them only when your serving configuration supports them; otherwise lower both
+caps to supported values. Prompt-token clamping handles remaining context room,
+not the serving pool's output limit. The harness's default summary cap is 65,536,
+so configure it explicitly when adapting the reference to a smaller limit.
+
+All output limits include reasoning and answer/tool tokens together. Max reasoning can increase latency and can
 still consume the full output allowance without a useful answer. Treat a change
 to effort, compaction, or output limits as a separate evaluation condition.
 
@@ -113,7 +128,8 @@ Terminal-Bench 4.0 run overrode the turn limit to unlimited; the shared base and
 SpreadsheetBench configuration used 500. The example uses the public API and a
 Docker smoke task rather than the historical dedicated endpoint and benchmark
 sandboxes, so it is not an exact reproduction of a historical score. Configured
-output allowances are also subject to the serving pool's enforced output ceiling.
+output allowances are also subject to the serving pool's enforced output ceiling;
+the configured evaluation caps do not guarantee that the public API accepts them.
 
 For a controlled comparison, keep task IDs, sandbox contents, package versions,
 prompts, sampling, compaction, output budgets, attempt counts, and scoring fixed.

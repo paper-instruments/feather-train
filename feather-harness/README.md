@@ -35,12 +35,15 @@ This harness contains the prompts we've tuned for internal testing. Start with:
 - **Compaction prompt:**
   [`production_compaction_prompt.md`](src/feather_harness/production_compaction_prompt.md).
 
-See [Prompting](https://docs.paperinstruments.com/docs/ultramarine/prompting) in the
-Ultramarine docs for request settings such as reasoning effort and sampling.
+See [Default Sampling Config](https://docs.paperinstruments.com/docs/ultramarine/default-sampling-config)
+for sampling and reasoning effort, and
+[Prompting and packages](https://docs.paperinstruments.com/docs/ultramarine/prompting-and-packages)
+for the prompting overview and execution-environment setup.
 
-For Harbor evaluations, start with the [Ultramarine evaluation reference](docs/evaluation.md)
-and its runnable configuration. It makes compaction, sampling, image tools, and
-task-environment package requirements explicit.
+For compaction and output budgets, see the
+[Ultramarine evaluation reference](docs/evaluation.md#sampling-and-context).
+Its runnable [Harbor configuration](../feather-eval/examples/ultramarine.yaml)
+also makes sampling, image tools, and task-environment package requirements explicit.
 
 ## How it works
 
@@ -116,9 +119,10 @@ the system prompt lists each skill's name and description. The model reads the
 
 ### Context compaction
 
-Compaction is off by default in the CLI and `run_local`; enable it with
-`"compaction": {"enabled": true, "context_window_tokens": ...}` set to your model's
-real window. Feather Train's training and eval configs turn it on. It lives in
+Compaction is off by default in Harbor, the CLI, and `run_local`; enable it with
+`"compaction": {"enabled": true, "context_window_tokens": ...}` using a harness
+budget within your model's supported context window. Selecting `profile: prod`
+alone does not enable it. Feather Train's training and eval configs turn it on. It lives in
 [`core/compaction.py`](src/feather_harness/core/compaction.py), called from the loop
 in [`core/runner.py`](src/feather_harness/core/runner.py).
 
@@ -140,6 +144,14 @@ in [`core/runner.py`](src/feather_harness/core/runner.py).
 
 Each compaction is recorded as its own segment in the `RunResult` trace, so the
 full history stays inspectable.
+
+The [Ultramarine evaluation reference](docs/evaluation.md#sampling-and-context)
+uses a 131,072-token harness budget, a 101,072-token trigger, and two retained
+turns. It requests 131,072-token execution and summary ceilings independently;
+these evaluation settings require serving support and do not establish a general
+production output limit. Lower both ceilings for a serving configuration with a
+smaller limit. The reference's pinned prompt-token budget also clamps output to
+remaining context room.
 
 ## Install and run
 
