@@ -154,9 +154,9 @@ class FeatherHarborAgent(BaseInstalledAgent):
         # No cwd override: Harbor's task image chooses the workspace via WORKDIR.
         with tempfile.TemporaryDirectory() as temporary:
             config = Path(temporary) / "config.json"
-            config.write_text(self.config.model_dump_json())
+            config.write_text(self.config.model_dump_json(), encoding="utf-8")
             prompt = Path(temporary) / "instruction.txt"
-            prompt.write_text(instruction)
+            prompt.write_text(instruction, encoding="utf-8")
             await environment.upload_file(config, f"{INSTALL_DIR}/config.json")
             await environment.upload_file(prompt, f"{INSTALL_DIR}/instruction.txt")
         command = shlex.join(
@@ -192,7 +192,7 @@ class FeatherHarborAgent(BaseInstalledAgent):
         # CLI setup failures or Harbor timeouts can leave redirected output empty.
         if not output.exists() or output.stat().st_size == 0:
             return
-        result = RunResult.model_validate_json(output.read_text())
+        result = RunResult.model_validate_json(output.read_text(encoding="utf-8"))
         write_atif(
             result,
             self.logs_dir,
