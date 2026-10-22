@@ -12,12 +12,12 @@ from .tools import Tool
 
 Profile = Literal["train", "prod"]
 
-PRODUCTION_PROMPT = (RESOURCE_ROOT / "production_prompt.md").read_text().strip()
+PRODUCTION_PROMPT = (RESOURCE_ROOT / "production_prompt.md").read_text(encoding="utf-8").strip()
 PRODUCTION_COMPACTION_PROMPT = (
-    (RESOURCE_ROOT / "production_compaction_prompt.md").read_text().strip()
+    (RESOURCE_ROOT / "production_compaction_prompt.md").read_text(encoding="utf-8").strip()
 )
 PRODUCTION_TOOL_DESCRIPTIONS = json.loads(
-    (RESOURCE_ROOT / "production_tool_descriptions.json").read_text()
+    (RESOURCE_ROOT / "production_tool_descriptions.json").read_text(encoding="utf-8")
 )
 VISION_ENABLED_FACT = "Image inspection is enabled through read, including source images and rendered pages."
 VISION_DISABLED_FACT = "Image inspection is not available; read handles text files only."
@@ -53,7 +53,7 @@ def build_production_instructions(
     ).replace(
         TRAIN_CATALOG_HEADING, PRODUCTION_CATALOG_HEADING, 1
     )
-    default_instructions = (RESOURCE_ROOT / "system_prompt.md").read_text().strip()
+    default_instructions = (RESOURCE_ROOT / "system_prompt.md").read_text(encoding="utf-8").strip()
     if task_instructions and task_instructions.strip() == default_instructions:
         task_instructions = None
     return compose_additional_instructions(
