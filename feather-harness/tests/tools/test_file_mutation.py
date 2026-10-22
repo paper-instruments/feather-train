@@ -82,6 +82,21 @@ async def test_edit_preserves_detected_utf16_encoding(tmp_path):
     assert path.read_bytes() == "café".encode("utf-16")
 
 
+async def test_edit_refuses_text_that_only_decodes_with_replacement(tmp_path):
+    path = tmp_path / "notes.txt"
+    # Text first, so the binary sniff passes; no encoding decodes the trailing bytes.
+    original = b"setting = 1\n" * 100 + bytes(range(128, 256)) * 4 + b"\nend\n"
+    path.write_bytes(original)
+    files = FileTools(LocalFileRuntime(tmp_path))
+    await invoke(files, "read", "notes.txt", limit=1)
+
+    result = await invoke(files, "edit", "notes.txt", old_string="end", new_string="done")
+
+    assert result.error == "tool_error"
+    assert "cannot be decoded as text" in result.content
+    assert path.read_bytes() == original
+
+
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"], ids=["plain-utf8", "utf8-with-bom"])
 async def test_short_utf8_round_trip_preserves_text_and_encoding(tmp_path, encoding):
     path = tmp_path / "notes.txt"
