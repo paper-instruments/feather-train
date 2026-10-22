@@ -115,6 +115,20 @@ async def test_bounds_concurrency_and_saves_results_before_run_finishes(evaluati
     assert json.loads((config.output_dir / "summary.json").read_text()) == summary
 
 
+async def test_existing_output_directory_fails_before_loading_tasks(evaluation, monkeypatch):
+    config, _env = evaluation
+    config.output_dir.mkdir()
+    (config.output_dir / "summary.json").write_text("{}")
+
+    def load_environment(**kwargs):
+        raise AssertionError("tasks were loaded for an unusable output directory")
+
+    monkeypatch.setattr(feather_eval, "load_environment", load_environment)
+    with pytest.raises(FileExistsError, match="already exists"):
+        await feather_eval.evaluate(config)
+    assert (config.output_dir / "summary.json").read_text() == "{}"
+
+
 async def test_repeated_rollouts_share_one_group_per_task(evaluation):
     config, env = evaluation
     config.rollouts_per_example = 3
