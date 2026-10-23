@@ -12,9 +12,9 @@ from openai import AsyncOpenAI
 from pydantic import Field, model_validator
 
 from .core.compaction import CompactionConfig
-from .core.messages import FrozenModel
+from .core.messages import AssistantMessage, FrozenModel
 from .core.model import ChatCompletionsModel, ModelSettings, RetryPolicy
-from .core.runner import AgentRunError
+from .core.runner import AgentRunError, RunResult
 from .core.token_budget import PromptTokenBudget
 from .local import run_local
 from .production import Profile
@@ -49,6 +49,32 @@ class LocalConfig(FrozenModel):
         if self.subagents is not None and self.profile != "prod":
             raise ValueError("Subagents are only available in the prod profile")
         return self
+
+
+def inspect_trace(path: Path) -> dict[str, object]:
+    """Summarize a saved run for CLI inspection without re-executing the agent."""
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(document, dict) and document.get("schema_version") == "tldc.feather-agent-trace.v2":
+        document = document["trace"]
+    if not isinstance(document, dict) or document.get("schema_version") != "feather.run.v1":
+        raise ValueError("Expected feather.run.v1 or tldc.feather-agent-trace.v2")
+    result = RunResult.model_validate(document)
+    tools: dict[str, int] = {}
+    for message in result.execution_messages():
+        if isinstance(message, AssistantMessage):
+            for call in message.tool_calls:
+                tools[call.name] = tools.get(call.name, 0) + 1
+    return {
+        "schema_version": result.schema_version,
+        "stop_reason": result.stop_reason,
+        "stop_message": result.stop_message,
+        "num_turns": result.num_turns,
+        "compactions": result.compactions,
+        "recoveries": result.recoveries,
+        "final_answer": result.final_answer,
+        "usage": result.usage().model_dump(mode="json", exclude_none=True),
+        "tools": dict(sorted(tools.items())),
+    }
 
 
 async def run(config: LocalConfig, prompt: str) -> int:
@@ -94,7 +120,11 @@ async def run(config: LocalConfig, prompt: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Feather on one task in a local workspace.")
-    parser.add_argument("prompt", help="Task instructions; use '-' to read them from stdin.")
+    parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Task instructions; use '-' to read them from stdin.",
+    )
     parser.add_argument("--config", type=Path, help="JSON configuration file.")
     parser.add_argument("--model", help="Model identifier at the Chat Completions endpoint.")
     parser.add_argument(
@@ -111,8 +141,25 @@ def main() -> int:
         help="Python executable for task shell commands; Feather keeps its own runtime.",
     )
     parser.add_argument("--profile", choices=("train", "prod"), help="Startup profile (default: prod).")
+    parser.add_argument(
+        "--inspect",
+        type=Path,
+        metavar="TRACE",
+        help="Print a JSON summary of a saved RunResult and exit.",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    if args.inspect is not None:
+        if args.prompt is not None:
+            parser.error("--inspect does not take a prompt")
+        try:
+            sys.stdout.write(json.dumps(inspect_trace(args.inspect)) + "\n")
+            return 0
+        except Exception as exc:
+            logger.error("%s: %s", type(exc).__name__, exc)
+            return 1
+    if args.prompt is None:
+        parser.error("the following arguments are required: prompt")
     try:
         values = json.loads(args.config.read_text()) if args.config else {}
         overrides = {

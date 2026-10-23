@@ -165,6 +165,9 @@ To convert a saved Feather run separately, from the workspace root:
 uv run --package feather-eval feather-atif run.json --output-dir atif --session-id my-run
 ```
 
+To print stop reason, usage, and tool-call counts from that same `run.json` without
+converting it, use `uv run --package feather-eval feather --inspect run.json`.
+
 Add `--grader` for a single chronological transcript.
 
 ## Development
