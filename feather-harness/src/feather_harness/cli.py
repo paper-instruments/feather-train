@@ -14,10 +14,11 @@ from pydantic import Field, model_validator
 from .core.compaction import CompactionConfig
 from .core.messages import FrozenModel
 from .core.model import ChatCompletionsModel, ModelSettings, RetryPolicy
-from .core.runner import AgentRunError
+from .core.runner import AgentRunError, RunResult
 from .core.token_budget import PromptTokenBudget
 from .local import run_local
 from .production import Profile
+from .scripts.save_transcript import save_transcript
 from .subagents import SubagentConfig
 from .tools.mcp import McpServerSpec
 from .tools.web.exa import ExaWebProvider
@@ -51,7 +52,9 @@ class LocalConfig(FrozenModel):
         return self
 
 
-async def run(config: LocalConfig, prompt: str) -> int:
+async def run(config: LocalConfig, prompt: str, *, output: Path | None = None) -> int:
+    if output is not None:
+        _require_writable_output(output)
     web_provider = (
         ExaWebProvider(api_key=os.environ.get("EXA_API_KEY", ""))
         if config.enable_web_tools
@@ -85,11 +88,39 @@ async def run(config: LocalConfig, prompt: str) -> int:
             )
         except AgentRunError as exc:
             # Preserve the loop's partial transcript when a model or tool fails.
-            sys.stdout.write(exc.result.model_dump_json() + "\n")
             logger.error("%s", exc)
+            _write_run_result(exc.result, workspace=config.workspace, output=output)
             return 1
-    sys.stdout.write(result.model_dump_json() + "\n")
+    _write_run_result(result, workspace=config.workspace, output=output)
     return 0 if result.stop_reason == "completed" else 1
+
+
+def _require_writable_output(path: Path) -> None:
+    existed = path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8"):
+        pass
+    if not existed:
+        path.unlink(missing_ok=True)
+
+
+def _write_run_result(result: RunResult, *, workspace: Path, output: Path | None) -> None:
+    payload = result.model_dump_json() + "\n"
+    # Persist copies first so a broken stdout pipe cannot drop the run files.
+    try:
+        save_transcript(Path(os.path.abspath(workspace)) / ".feather" / "run.json", payload)
+    except OSError:
+        logger.warning("Could not save the run result under .feather/run.json", exc_info=True)
+    if output is not None:
+        try:
+            save_transcript(output, payload)
+        except OSError:
+            logger.warning("Could not write the run result to --output", exc_info=True)
+    try:
+        sys.stdout.write(payload)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        pass
 
 
 def main() -> int:
@@ -111,6 +142,11 @@ def main() -> int:
         help="Python executable for task shell commands; Feather keeps its own runtime.",
     )
     parser.add_argument("--profile", choices=("train", "prod"), help="Startup profile (default: prod).")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Write the RunResult JSON to this path in addition to stdout and .feather/run.json.",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     try:
@@ -124,7 +160,7 @@ def main() -> int:
         prompt = sys.stdin.read() if args.prompt == "-" else args.prompt
         if not prompt.strip():
             raise ValueError("Task instructions must not be empty")
-        return asyncio.run(run(config, prompt))
+        return asyncio.run(run(config, prompt, output=args.output))
     except KeyboardInterrupt:
         return 130
     except Exception as exc:

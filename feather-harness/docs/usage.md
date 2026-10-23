@@ -144,7 +144,10 @@ JSON config supports model settings, context compaction, and MCP servers. For ex
 cat task.txt | ~/.local/bin/feather --config config.json - > run.json
 ```
 
-CLI flags override matching config fields. The workspace must already exist. Choose
+CLI flags override matching config fields. `--output` is CLI-only: it writes the
+`RunResult` JSON to a path in addition to stdout and is not a config field.
+Relative `--output` paths resolve from the directory where you launch Feather, not
+`--workdir`. The workspace must already exist. Choose
 an actual model-supported context window. The `prod` profile compacts unless
 `"enabled": false` is set; the `train` profile compacts only with `"enabled": true`.
 See [LocalConfig](../src/feather_harness/cli.py)
@@ -199,10 +202,14 @@ lifecycle limits and application integration.
 
 ## Execution traces
 
-The CLI writes `RunResult` JSON to stdout. It records execution and compaction
-segments with their starting contexts and new messages, so you can inspect how the
-agent reached its result even across compactions. `execution_messages()` provides
-a chronological transcript without duplicated context or summary calls.
+The CLI writes `RunResult` JSON to stdout. It also saves a copy at
+`.feather/run.json` in the workspace after any run that produces a result, including
+failed loops that still emit a partial trace. Pass `--output PATH` to write the same
+document to a caller-chosen file. Shell redirection (`> run.json`) remains supported.
+The trace records execution and compaction segments with their starting contexts and
+new messages, so you can inspect how the agent reached its result even across
+compactions. `execution_messages()` provides a chronological transcript without
+duplicated context or summary calls.
 
 The CLI currently runs one task at a time; interactive chat, resume, and image attachments
 on the initial command are not supported. Enabled image tools can inspect files and
