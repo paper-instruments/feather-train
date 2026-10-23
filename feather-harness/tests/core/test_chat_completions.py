@@ -4,7 +4,13 @@ import json
 
 import httpx
 import pytest
-from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APIError,
+    APIResponseValidationError,
+    APIStatusError,
+    AsyncOpenAI,
+)
 
 from feather_harness import (
     AgentRunError,
@@ -319,3 +325,151 @@ async def test_stream_ending_in_provider_error_is_retried():
         result = await model.complete([UserMessage(content="task")], settings=ModelSettings())
     assert len(requests) == 2
     assert (result.assistant.content, result.finish_reason) == ("done", "stop")
+
+
+@pytest.mark.parametrize("kind", ["agent", "compaction"])
+@pytest.mark.parametrize("error", [
+    {"type": "api_error", "code": "upstream_error", "message": "The model stream was interrupted."},
+    {"code": 502, "message": "Network connection lost."},
+    {"message": "Network connection lost."},
+])
+async def test_in_stream_api_errors_discard_partial_output_before_retry(error, kind):
+    requests = []
+    replies = [
+        _sse(_delta(content="partial", reasoning="discard this"), {"error": error}),
+        _sse(_delta(content="done", finish_reason="stop")),
+    ]
+
+    async def respond(request):
+        requests.append(json.loads(request.content))
+        return replies[len(requests) - 1]
+
+    async with AsyncOpenAI(
+        api_key="test", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        result = await ChatCompletionsModel(
+            client=client, model="model", stream=True,
+            retry=RetryPolicy(max_attempts=2, base_backoff_seconds=0),
+        ).complete([UserMessage(content="task")], settings=ModelSettings(), kind=kind)
+
+    assert requests == [requests[0]] * 2
+    assert result.assistant.content == "done"
+    assert result.assistant.reasoning_content is None
+    assert all(reply.is_closed for reply in replies)
+
+
+@pytest.mark.parametrize("error", [
+    {"code": code, "message": "Permanent failure"} for code in [400, 401, 403, 404, 422]
+] + [
+    {"type": "invalid_request_error", "message": "Invalid input"},
+    {"type": "authentication_error", "message": "Invalid key"},
+    {"code": "context_length_exceeded", "message": "Context too long"},
+    {"code": "insufficient_quota", "message": "Insufficient balance"},
+    {"code": "content_policy_violation", "message": "Refused"},
+])
+async def test_permanent_in_stream_api_errors_are_not_retried(error):
+    requests = []
+
+    async def respond(request):
+        requests.append(request)
+        return _sse({"error": error})
+
+    async with AsyncOpenAI(
+        api_key="test", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        with pytest.raises(APIError):
+            await ChatCompletionsModel(
+                client=client, model="model", stream=True,
+                retry=RetryPolicy(max_attempts=3, base_backoff_seconds=0),
+            ).complete([UserMessage(content="task")], settings=ModelSettings())
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("retry, attempts", [
+    (None, 1), (RetryPolicy(max_attempts=2, base_backoff_seconds=0), 2),
+])
+async def test_in_stream_api_errors_respect_retry_budget_and_preserve_error(retry, attempts):
+    requests = []
+    error = {"type": "api_error", "code": "upstream_error", "message": "Interrupted"}
+
+    async def respond(request):
+        requests.append(request)
+        return _sse({"error": error})
+
+    async with AsyncOpenAI(
+        api_key="test", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        with pytest.raises(APIError) as caught:
+            await ChatCompletionsModel(
+                client=client, model="model", stream=True, retry=retry,
+            ).complete([UserMessage(content="task")], settings=ModelSettings())
+    assert len(requests) == attempts
+    assert type(caught.value) is APIError
+    assert caught.value.body == error
+
+
+async def test_stream_response_schema_errors_are_not_retried():
+    requests = []
+
+    async def respond(request):
+        requests.append(request)
+        return _sse({"choices": "invalid schema"})
+
+    async with AsyncOpenAI(
+        api_key="test", max_retries=0, _strict_response_validation=True,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        with pytest.raises(APIResponseValidationError):
+            await ChatCompletionsModel(
+                client=client, model="model", stream=True,
+                retry=RetryPolicy(max_attempts=3, base_backoff_seconds=0),
+            ).complete([UserMessage(content="task")], settings=ModelSettings())
+    assert len(requests) == 1
+
+
+async def test_in_stream_retry_does_not_replay_completed_or_partial_tool_calls():
+    requests, edits = [], []
+    replies = [
+        _sse(_delta(tool_calls=[{
+            "index": 0, "id": "edit-1", "type": "function",
+            "function": {"name": "edit", "arguments": '{"file":"notes.txt"}'},
+        }]), _delta(finish_reason="tool_calls")),
+        _sse(_delta(content="partial", tool_calls=[{
+            "index": 0, "id": "partial-edit", "type": "function",
+            "function": {"name": "edit", "arguments": '{"file":'},
+        }]), {"error": {"code": "upstream_error", "message": "Interrupted"}}),
+        _sse(_delta(content="done", finish_reason="stop")),
+    ]
+
+    async def edit(arguments):
+        edits.append(arguments)
+        return ToolResult(content="File updated.")
+
+    async def respond(request):
+        requests.append(json.loads(request.content))
+        return replies[len(requests) - 1]
+
+    async with AsyncOpenAI(
+        api_key="test", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        result = await FeatherAgent(
+            model=ChatCompletionsModel(
+                client=client, model="model", stream=True,
+                retry=RetryPolicy(max_attempts=2, base_backoff_seconds=0),
+            ),
+            tools=(Tool(
+                spec=ToolSpec(name="edit", description="Edit a file", parameters={}),
+                invoke=edit,
+            ),),
+        ).run(RunRequest(messages=(UserMessage(content="Update notes.txt"),)))
+    assert result.final_answer == "done"
+    assert edits == ['{"file":"notes.txt"}']
+    assert len(requests) == 3
+    assert requests[1] == requests[2]
+    assert requests[2]["messages"][-1] == {
+        "role": "tool", "tool_call_id": "edit-1", "content": "File updated.",
+    }
