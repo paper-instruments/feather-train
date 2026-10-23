@@ -364,6 +364,13 @@ async def test_in_stream_api_errors_discard_partial_output_before_retry(error, k
 ] + [
     {"type": "invalid_request_error", "message": "Invalid input"},
     {"type": "authentication_error", "message": "Invalid key"},
+    {"type": "permission_error", "message": "Permission denied"},
+    {"type": "permission_denied", "message": "Permission denied"},
+    {"type": "content_filter", "message": "Filtered"},
+    {"type": "not_found_error", "message": "Resource not found"},
+    {"code": "not_found_error", "message": "Resource not found"},
+    {"type": "model_not_found", "message": "Model not found"},
+    {"code": "model_not_found", "message": "Model not found"},
     {"code": "context_length_exceeded", "message": "Context too long"},
     {"code": "insufficient_quota", "message": "Insufficient balance"},
     {"code": "content_policy_violation", "message": "Refused"},

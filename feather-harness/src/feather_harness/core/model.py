@@ -188,6 +188,7 @@ class TruncatedStreamError(RuntimeError):
 _RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 _NON_RETRYABLE_STREAM_ERRORS = frozenset({
     "invalid_request_error", "authentication_error", "permission_error", "permission_denied",
+    "not_found_error", "model_not_found",
     "insufficient_quota", "context_length_exceeded", "content_filter", "content_policy_violation",
 })
 
