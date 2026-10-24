@@ -19,7 +19,7 @@ office = [
     "paper-pptx==0.2.0",
     "paper-xlsx==0.2.1",
     "reportlab>=4,<5",
-    "pypdf>=6,<7",
+    "pypdf>=6.21.2,<7",
     "pdfplumber>=0.11,<0.12",
     "pdf2image>=1.17,<2",
     "pypdfium2>=5,<6",
