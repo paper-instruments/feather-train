@@ -16,13 +16,13 @@ def build_instructions(
     skills_path: str = ".agents",
 ) -> str:
     if instructions is None:
-        instructions = (RESOURCE_ROOT / "system_prompt.md").read_text()
+        instructions = (RESOURCE_ROOT / "system_prompt.md").read_text(encoding="utf-8")
     fragments = []
     if instructions:
         fragments.append(f"# Agent instructions\n\n{instructions}")
     skills = []
     for path in sorted(skills_root.glob("*/SKILL.md")):
-        content = path.read_text()
+        content = path.read_text(encoding="utf-8")
         metadata = {}
         lines = content.splitlines()
         if lines and lines[0].strip() == "---":

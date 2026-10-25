@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import subprocess
+import sys
 import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -197,6 +200,40 @@ async def test_production_keeps_the_trained_catalog_and_appends_guidance(tmp_pat
     guidance += [path.read_text() for path in (BUNDLE_ROOT / "production_skills").glob("*.md")]
     for path in {path for text in guidance for path in re.findall(r"`(\.agents/[^`]+)`", text)}:
         assert (tmp_path / path).is_file(), path
+
+
+def test_production_instructions_are_utf8_with_a_legacy_locale_encoding(tmp_path: Path) -> None:
+    skill = tmp_path / "skills" / "résumé"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: résumé\ndescription: Tailor a résumé — keep it brief.\n---\n",
+        encoding="utf-8",
+    )
+    # Run in a separate process: the prompts are read at import time with the locale encoding.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from pathlib import Path; "
+            "from feather_harness.production import build_production_instructions; "
+            "sys.stdout.write(build_production_instructions(skills_root=Path(sys.argv[1])))",
+            str(tmp_path / "skills"),
+        ],
+        capture_output=True,
+        env={
+            **os.environ,
+            "LC_ALL": "C",
+            "PYTHONCOERCECLOCALE": "0",
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUTF8": "0",
+        },
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    instructions = result.stdout.decode("utf-8")
+    assert PRODUCTION_PROMPT in instructions
+    assert "- résumé: Tailor a résumé — keep it brief." in instructions
 
 
 def test_a_host_owned_skill_tree_serves_every_production_reference(tmp_path: Path) -> None:
