@@ -263,6 +263,17 @@ def test_cli_rejects_invalid_config_before_workspace_setup(tmp_path):
     assert not (tmp_path / ".agents").exists()
 
 
+def test_cli_rejects_whitespace_model_before_workspace_setup(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"model": "   "}))
+
+    completed = cli(tmp_path, "--config", str(config), "Do the task")
+
+    assert completed.returncode == 1
+    assert "model must contain non-whitespace characters" in completed.stderr
+    assert not (tmp_path / ".agents").exists()
+
+
 def test_cli_web_tools_require_exa_key_before_workspace_setup(tmp_path, monkeypatch):
     monkeypatch.delenv("EXA_API_KEY", raising=False)
     config = tmp_path / "config.json"
