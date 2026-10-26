@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+from importlib.metadata import version
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -94,6 +95,9 @@ async def run(config: LocalConfig, prompt: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Feather on one task in a local workspace.")
+    parser.add_argument(
+        "--version", action="version", version=f"feather {version('feather-harness')}"
+    )
     parser.add_argument("prompt", help="Task instructions; use '-' to read them from stdin.")
     parser.add_argument("--config", type=Path, help="JSON configuration file.")
     parser.add_argument("--model", help="Model identifier at the Chat Completions endpoint.")
