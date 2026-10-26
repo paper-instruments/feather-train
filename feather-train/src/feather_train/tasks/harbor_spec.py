@@ -212,7 +212,12 @@ def _artifacts(harbor: dict, *, where: str) -> tuple[HarborArtifact, ...]:
         else:
             raise ValueError(f"{where} artifacts[{index}] must be a path or service source")
         path = Path(source)
-        if not path.is_absolute() or source == "/" or any(part in {".", ".."} for part in source.split("/")):
+        if (
+            not path.is_absolute()
+            or source == "/"
+            or source.endswith("/")
+            or any(part in {".", ".."} for part in source.split("/"))
+        ):
             raise ValueError(f"{where} artifacts[{index}].source must be an absolute file path")
         if source in paths or path.name in basenames:
             raise ValueError(f"{where} artifacts contain a duplicate path or basename: {source}")

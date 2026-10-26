@@ -164,6 +164,25 @@ def test_unknown_artifact_service_is_rejected(tmp_path):
         parse_harbor_spec(path, where="apex")
 
 
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        '"/logs/output/"',
+        '{source = "/logs/output/", service = "world"}',
+    ],
+)
+def test_artifact_source_must_name_a_file(tmp_path, artifact):
+    path = _write_world(
+        tmp_path,
+        f"artifacts = [{artifact}]\n\n"
+        '[environment]\nnetwork_mode = "public"\nworkdir = "/app"\n\n'
+        '[verifier]\nenvironment_mode = "separate"\n',
+    )
+
+    with pytest.raises(ValueError, match=r"artifacts\[0\]\.source must be an absolute file path"):
+        parse_harbor_spec(path, where="apex")
+
+
 def test_separate_parses_collect_and_artifacts(tmp_path):
     path = _write_world(
         tmp_path,
