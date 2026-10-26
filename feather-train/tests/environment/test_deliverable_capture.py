@@ -84,6 +84,28 @@ def test_capture_roots_cannot_include_grader_or_runtime(root):
         FeatherHarnessConfig(capture_deliverables=True, capture_paths=(root,))
 
 
+@pytest.mark.parametrize(
+    "roots",
+    [
+        ("/filesystem/reports", "/filesystem/reports"),
+        ("/filesystem", "/filesystem/reports"),
+        ("/filesystem/reports", "/filesystem"),
+    ],
+)
+def test_capture_roots_must_not_overlap(roots):
+    with pytest.raises(ValidationError, match="capture_paths must not overlap"):
+        FeatherHarnessConfig(capture_deliverables=True, capture_paths=roots)
+
+
+def test_capture_roots_allow_distinct_siblings():
+    config = FeatherHarnessConfig(
+        capture_deliverables=True,
+        capture_paths=("/filesystem/reports", "/filesystem/images"),
+    )
+
+    assert config.capture_paths == ("/filesystem/reports", "/filesystem/images")
+
+
 @pytest.mark.parametrize("commit_fails", [False, True])
 async def test_receipt_is_durable_only_after_volume_commit(tmp_path, monkeypatch, commit_fails):
     data = b"\x00binary archive\xff"
