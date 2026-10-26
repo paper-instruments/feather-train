@@ -77,6 +77,36 @@ async def test_fetch_preserves_request_limit_and_resolved_url():
     )
 
 
+@pytest.mark.parametrize(
+    "url",
+    ["http://127.0.0.1/admin", "https://example.com/" + "a" * 2_000, "https://example.com/a b"],
+)
+async def test_search_skips_a_source_url_the_tools_cannot_render(url):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            200, json={"results": [{"url": url, "title": "Bad"}, {"url": URL, "title": "Good"}]}
+        )
+
+    results = await provider_for(respond).search("filing", limit=2)
+    assert results == [WebSearchResult(title="Good", url=URL)]
+    assert len(requests) == 1
+
+
+async def test_fetch_resolved_to_a_non_public_url_is_unavailable_without_retry():
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=fetched_page(url="http://10.0.0.5/article"))
+
+    result = await provider_for(respond).fetch(URL, max_characters=100)
+    assert result == WebFetchUnavailable(reason="not_available")
+    assert len(requests) == 1
+
+
 @pytest.mark.parametrize("failure", [503, 429, "transport", "malformed", "oversized"])
 async def test_search_retries_transient_failures_and_recovers(failure):
     requests = []

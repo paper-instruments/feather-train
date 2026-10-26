@@ -23,6 +23,7 @@ from tenacity import (
 
 from .fetch import WebFetchResult, WebFetchUnavailable
 from .search import WebSearchResult
+from .urls import validate_public_web_url
 
 logger = logging.getLogger(__name__)
 
@@ -280,14 +281,17 @@ def _parse_search_results(
     raw_results = payload["results"]
     if len(raw_results) > limit:
         raise ExaResponseError(f"Exa returned {len(raw_results)} results for a limit of {limit}")
-    return [
-        _parse_search_result(raw_result, index=index)
-        for index, raw_result in enumerate(raw_results)
-        if not _is_blocked_source(raw_result, blocked_domains, blocked_content_markers)
-    ]
+    results = []
+    for index, raw_result in enumerate(raw_results):
+        if _is_blocked_source(raw_result, blocked_domains, blocked_content_markers):
+            continue
+        result = _parse_search_result(raw_result, index=index)
+        if result is not None:
+            results.append(result)
+    return results
 
 
-def _parse_search_result(raw_result: object, *, index: int) -> WebSearchResult:
+def _parse_search_result(raw_result: object, *, index: int) -> WebSearchResult | None:
     if not isinstance(raw_result, dict):
         raise ExaResponseError(f"Exa result {index} was not an object")
 
@@ -308,6 +312,10 @@ def _parse_search_result(raw_result: object, *, index: int) -> WebSearchResult:
         raise ExaResponseError(f"Exa result {index} contained invalid highlights")
     if published_date is not None and not isinstance(published_date, str):
         raise ExaResponseError(f"Exa result {index} contained an invalid publication date")
+    if not _is_renderable_url(url):
+        # One source the tool cannot render must not fail, or retry, the whole search.
+        logger.warning("Skipping Exa result %d with a non-public or invalid URL", index)
+        return None
 
     try:
         return WebSearchResult(
@@ -374,6 +382,11 @@ def _parse_fetch_result(
         raise ExaResponseError("Exa contents result did not contain text")
     if len(content) > max_characters:
         raise ExaResponseError(f"Exa contents result exceeded {max_characters} characters")
+    if not _is_renderable_url(resolved_url):
+        # Exa may resolve a public URL to a location the tool cannot render; retrying cannot
+        # change that, so the model gets an ordinary unavailable source.
+        logger.warning("Exa resolved a fetch to a non-public or invalid URL")
+        return WebFetchUnavailable(reason="not_available")
     try:
         return WebFetchResult(
             url=resolved_url,
@@ -382,6 +395,14 @@ def _parse_fetch_result(
         )
     except ValueError as exc:
         raise ExaResponseError(f"Exa contents result was invalid: {exc}") from exc
+
+
+def _is_renderable_url(url: str) -> bool:
+    try:
+        validate_public_web_url(url, label="Exa source URL")
+    except ValueError:
+        return False
+    return True
 
 
 def _normalize_text(value: str) -> str:
