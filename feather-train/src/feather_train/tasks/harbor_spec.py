@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import tomllib
 from dataclasses import dataclass, replace
@@ -235,8 +236,14 @@ def _timeout_sec(table: dict, *, where: str) -> float | None:
     value = table.get("timeout_sec")
     if value is None:
         return None
-    if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0:
-        raise ValueError(f"{where}.timeout_sec must be a positive number")
+    # TOML accepts nan and inf, which would otherwise pass the positivity check.
+    if (
+        not isinstance(value, int | float)
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"{where}.timeout_sec must be a finite positive number")
     return float(value)
 
 
