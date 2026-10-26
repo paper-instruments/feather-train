@@ -344,7 +344,9 @@ class FeatherAgent:
                     content = f"Tool '{tool_call.name}' not found."
                     results.append(ToolResult(content=content, error="tool_error"))
                 else:
-                    output = await tool.invoke(tool_call.arguments)
+                    # Streams for parameterless calls can carry no argument text; replay
+                    # already sends these as {}, so tools receive the same object.
+                    output = await tool.invoke(tool_call.arguments or "{}")
                     content = output.content
                     results.append(output)
                 state.context.append(ToolMessage(tool_call_id=tool_call.id, content=content))

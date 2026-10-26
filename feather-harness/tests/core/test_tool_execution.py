@@ -13,6 +13,7 @@ from feather_harness import (
     ToolResult,
     UserMessage,
 )
+from feather_harness.tools.todo import TodoList
 
 from ..helpers import ScriptedModel, request, tool, work_message
 
@@ -50,6 +51,18 @@ async def test_tool_results_match_call_ids_and_execution_order_in_next_request()
         ("missing", "Tool 'unknown' not found."),
         ("second", '{"value":2}'),
     ]
+
+
+async def test_empty_arguments_reach_tools_as_an_empty_object():
+    model = ScriptedModel(
+        AssistantMessage(tool_calls=(ToolCall(id="read", name="todo_write", arguments=""),)),
+        AssistantMessage(content="done"),
+    )
+    result = await FeatherAgent(model=model, tools=(TodoList().tool(),)).run(request())
+
+    assert result.final_answer == "done"
+    (reply,) = [m for m in model.calls[1].request["messages"] if m["role"] == "tool"]
+    assert reply["content"] == '{"todos":[]}'
 
 
 async def test_tool_failure_keeps_prior_result_and_stops_remaining_calls():
