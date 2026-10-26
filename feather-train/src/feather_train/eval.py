@@ -89,6 +89,9 @@ class EvalModelClient(EvalClient):
 
 async def evaluate(config: EvalConfig) -> dict:
     """Save each finished trace; fail the run on a nonretryable harness error."""
+    # Check before dataset downloads; mkdir(exist_ok=False) below still guards against races.
+    if os.path.lexists(config.output_dir):
+        raise FileExistsError(f"Eval output directory already exists: {config.output_dir}")
     api_key = os.environ[config.api_key_env]
     run_id = uuid.uuid4().hex
     experiment = config.braintrust_experiment or f"feather-eval-{run_id}"
