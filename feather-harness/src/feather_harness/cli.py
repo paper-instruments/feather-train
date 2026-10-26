@@ -113,15 +113,17 @@ def main() -> int:
     parser.add_argument("--profile", choices=("train", "prod"), help="Startup profile (default: prod).")
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    # Task text and the JSON result cross process boundaries as UTF-8, whatever the locale.
+    sys.stdout.reconfigure(encoding="utf-8")
     try:
-        values = json.loads(args.config.read_text()) if args.config else {}
+        values = json.loads(args.config.read_text(encoding="utf-8")) if args.config else {}
         overrides = {
             name: getattr(args, name)
             for name in ("model", "base_url", "workspace", "python", "max_turns", "profile")
             if getattr(args, name) is not None
         }
         config = LocalConfig.model_validate({**values, **overrides})
-        prompt = sys.stdin.read() if args.prompt == "-" else args.prompt
+        prompt = sys.stdin.buffer.read().decode("utf-8") if args.prompt == "-" else args.prompt
         if not prompt.strip():
             raise ValueError("Task instructions must not be empty")
         return asyncio.run(run(config, prompt))

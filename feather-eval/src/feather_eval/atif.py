@@ -105,7 +105,9 @@ def write_atif(
     trajectories = to_atif(result, agent=agent, session_id=session_id, grader=grader)
     directory.mkdir(parents=True, exist_ok=True)
     for name, trajectory in trajectories.items():
-        (directory / name).write_text(trajectory.model_dump_json(exclude_none=True, indent=2))
+        (directory / name).write_text(
+            trajectory.model_dump_json(exclude_none=True, indent=2), encoding="utf-8"
+        )
 
 
 def _steps(messages: tuple[Message, ...], *, copied_inputs: int = 0) -> list[Step]:
@@ -242,7 +244,7 @@ def main() -> None:
         "--grader", action="store_true", help="Write one chronological execution transcript"
     )
     args = parser.parse_args()
-    document = json.loads(args.trace.read_text())
+    document = json.loads(args.trace.read_text(encoding="utf-8"))
     agent_name = "feather"
     model = args.model
     session_id = args.session_id
