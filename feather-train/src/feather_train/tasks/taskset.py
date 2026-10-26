@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tomllib
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
@@ -421,6 +422,15 @@ def _load_selected_tasks(
                     all_tasks.append(_parse_exported_row(line))
                 except ValueError as exc:
                     raise ValueError(f"{hf_dataset}: tasks.jsonl row {index}: {exc}") from exc
+    duplicate_ids = sorted(
+        task_id
+        for task_id, count in Counter(task.task_id for task in all_tasks).items()
+        if count > 1
+    )
+    if duplicate_ids:
+        raise ValueError(
+            f"{hf_dataset}: tasks.jsonl contains duplicate task ID(s): {duplicate_ids[:10]}"
+        )
     has_factory = any(isinstance(task, SourceRow) for task in all_tasks)
     has_benchmark = any(isinstance(task, BenchmarkSourceRow) for task in all_tasks)
     if has_factory and has_benchmark:

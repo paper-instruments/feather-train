@@ -239,6 +239,17 @@ def test_rejects_bad_producer_contract_before_loading_manifest(exported_dataset,
     assert requests == ["tasks.jsonl"]
 
 
+def test_rejects_duplicate_task_ids_before_loading_manifest(exported_dataset):
+    rows, files, requests = exported_dataset
+    rows[1]["task_id"] = rows[0]["task_id"]
+    files["tasks.jsonl"] = "\n".join(json.dumps(row) for row in rows)
+
+    with pytest.raises(ValueError, match=r"duplicate task ID.*one"):
+        load()
+
+    assert requests == ["tasks.jsonl"]
+
+
 def test_checks_requested_ids_before_limiting_tasks(exported_dataset):
     with pytest.raises(ValueError, match="requested task ID"):
         load(task_ids=["one", "missing"], max_tasks=1)
