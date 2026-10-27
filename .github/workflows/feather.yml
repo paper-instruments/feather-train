@@ -81,6 +81,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.14"
@@ -90,13 +92,18 @@ jobs:
           uv run --no-project --python 3.12 python scripts/check_install.py
       - name: Build wheels and source distributions
         run: uv build --all-packages --out-dir dist
-      - name: Install wheels outside the checkout
+      - name: Refuse public internal-package substitution
+        run: uv run --no-project --with pip --with hatchling python scripts/check_internal_dependencies.py dist
+      - name: Install source-bound distributions outside the checkout
         run: |
           uv venv "$RUNNER_TEMP/feather-wheels"
-          uv pip install --python "$RUNNER_TEMP/feather-wheels/bin/python" dist/*.whl
+          uv pip install --python "$RUNNER_TEMP/feather-wheels/bin/python" dist/feather_train-*.whl dist/feather_eval-*.whl
+          uv venv "$RUNNER_TEMP/feather-harness-wheel"
+          uv pip install --python "$RUNNER_TEMP/feather-harness-wheel/bin/python" dist/feather_harness-*.whl
       - name: Check installed entrypoints and bundled runtime
         working-directory: ${{ runner.temp }}
         run: |
+          feather-harness-wheel/bin/feather --help
           feather-wheels/bin/feather --help
           feather-wheels/bin/feather-atif --help
           feather-wheels/bin/python -m feather_train.sandbox.runtime feather-runtime.tar.gz
