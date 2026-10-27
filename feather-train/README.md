@@ -160,7 +160,7 @@ Omit `-m` to run both suites. Local and Docker tests need no cloud credentials.
 
 Standalone evaluation JSON accepts `enable_image_tools: true` for native workspace image inspection and MCP image results. This requires a vision-capable endpoint; it is disabled by default and managed training renderer clients reject image prompts before sampling.
 
-### Verifier dependency cutover
+## Verifier dependency cutover
 
 The grader uses a schema-compatible Rubric security backport from the immutable
 archive URL in `feather_train.grading.dependencies.GRADER_PIP_DEPS`. Its source
@@ -172,8 +172,12 @@ and must not be substituted just because it once declared the same version.
 After that backport commit is available in the public Rubric repository, rebake
 isolated verifier images by installing the exact PEP 508 requirements exported in
 `GRADER_PIP_DEPS`. The archive installation needs no Git executable. Train checks
-both installed versions and Rubric's `direct_url.json` source URL before grading;
-old images and same-version packages from another source fail closed. Installing
+both installed versions and Rubric's `direct_url.json` source URL before grading
+on the default verifier path (`environment_mode` is unset). Old images and
+same-version packages from another source fail setup there. Task-owned Harbor
+`shared` and `separate` environments are outside this package check: their owners
+must install and verify the corrected grader dependencies in those images.
+Installing
 a separately built wheel changes that provenance record and is not this cutover
 path. Re-run task-owned graders against the new image before using it for scoring.
 The delimiter encoding changes model-visible prompts and reduces one spoofing
