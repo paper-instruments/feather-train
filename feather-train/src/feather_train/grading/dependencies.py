@@ -15,7 +15,7 @@ GRADER_PACKAGE_VERSIONS = {
 # This is an immutable source dependency, not a claim of a published PyPI release.
 GRADER_SOURCE_URLS = {
     "rubric": "https://github.com/paper-instruments/rubric/archive/"
-    "9dd4a93b8fddeeeac01d5da468b3ed6de1b76013.tar.gz",
+    "ed316ad73ceedd295828b656eb04f0b747e66dcc.tar.gz",
 }
 GRADER_PIP_DEPS = tuple(
     f"{name} @ {GRADER_SOURCE_URLS[name]}" if name in GRADER_SOURCE_URLS else f"{name}=={version}"
