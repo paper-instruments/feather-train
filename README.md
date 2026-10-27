@@ -89,7 +89,10 @@ harness dependency resolves to this repository. Built Train/Eval wheels also car
 full-commit Git source reference for the harness in standard dependency metadata;
 generic pip installs therefore require Git and do not fall back to a public
 `feather-harness` package. The source commit is deliberately pinned and must be
-updated when adopting a newer harness. Uv workspace development continues to use
+updated when adopting a newer harness. Keep the source commit reachable on the
+remote; before deleting, squashing or rewriting its only containing branch,
+update the pin to the reviewed merged or released commit and rebuild consumers.
+Uv workspace development continues to use
 the local member. These Git-reference wheels are for source consumers, not a
 claim that the internal names are published or reserved on PyPI.
 
