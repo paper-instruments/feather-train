@@ -94,13 +94,16 @@ jobs:
         run: uv build --all-packages --out-dir dist
       - name: Refuse public internal-package substitution
         run: uv run --no-project --with pip --with hatchling python scripts/check_internal_dependencies.py dist
-      - name: Install wheels outside the checkout
+      - name: Install source-bound distributions outside the checkout
         run: |
           uv venv "$RUNNER_TEMP/feather-wheels"
-          uv pip install --python "$RUNNER_TEMP/feather-wheels/bin/python" dist/*.whl
+          uv pip install --python "$RUNNER_TEMP/feather-wheels/bin/python" dist/feather_train-*.whl dist/feather_eval-*.whl
+          uv venv "$RUNNER_TEMP/feather-harness-wheel"
+          uv pip install --python "$RUNNER_TEMP/feather-harness-wheel/bin/python" dist/feather_harness-*.whl
       - name: Check installed entrypoints and bundled runtime
         working-directory: ${{ runner.temp }}
         run: |
+          feather-harness-wheel/bin/feather --help
           feather-wheels/bin/feather --help
           feather-wheels/bin/feather-atif --help
           feather-wheels/bin/python -m feather_train.sandbox.runtime feather-runtime.tar.gz
