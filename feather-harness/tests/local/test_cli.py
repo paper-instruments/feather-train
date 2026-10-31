@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import signal
@@ -10,11 +11,14 @@ import threading
 import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 from openai import AsyncOpenAI
 
 from feather_harness import ChatCompletionsModel, CompactionConfig, run_local
+from feather_harness.cli import LocalConfig, _require_writable_output, run
+from feather_harness.core.runner import AgentRunError, RunResult
 from feather_harness.prompt import SKILLS_ROOT, build_instructions
 
 
@@ -250,6 +254,7 @@ def test_cli_returns_partial_json_after_exhausting_request_retries(tmp_path):
     result = json.loads(completed.stdout)
     assert result["stop_reason"] == "failed"
     assert result["segments"][-1]["input"][-1]["content"] == "Do the task"
+    assert json.loads((tmp_path / ".feather" / "run.json").read_text(encoding="utf-8")) == result
     assert len(requests) == 3
     assert requests[0] == requests[1] == requests[2]
 
@@ -261,6 +266,203 @@ def test_cli_rejects_invalid_config_before_workspace_setup(tmp_path):
     assert completed.returncode == 1
     assert "unknown_option" in completed.stderr
     assert not (tmp_path / ".agents").exists()
+    assert not (tmp_path / ".feather" / "run.json").exists()
+
+
+def test_cli_writes_run_json_under_feather_and_output_path(tmp_path):
+    with model_server([(200, response("Done."))]) as (url, _):
+        output = tmp_path / "reports" / "result.json"
+        completed = cli(
+            tmp_path,
+            "--model",
+            "test",
+            "--base-url",
+            url,
+            "--profile",
+            "train",
+            "--output",
+            str(output),
+            "Do the task",
+        )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["final_answer"] == "Done."
+    saved = json.loads((tmp_path / ".feather" / "run.json").read_text(encoding="utf-8"))
+    copied = json.loads(output.read_text(encoding="utf-8"))
+    assert saved == result == copied
+
+
+def test_cli_resolves_relative_output_from_launch_directory(tmp_path):
+    launch = tmp_path / "launch"
+    workspace = tmp_path / "workspace"
+    launch.mkdir()
+    workspace.mkdir()
+    with model_server([(200, response("Done."))]) as (url, _):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "feather_harness",
+                "--model",
+                "test",
+                "--base-url",
+                url,
+                "--profile",
+                "train",
+                "--workdir",
+                str(workspace),
+                "--output",
+                "reports/result.json",
+                "Do the task",
+            ],
+            cwd=launch,
+            env={**os.environ, "OPENAI_API_KEY": "test-key"},
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    copied = json.loads((launch / "reports" / "result.json").read_text(encoding="utf-8"))
+    saved = json.loads((workspace / ".feather" / "run.json").read_text(encoding="utf-8"))
+    assert copied == result == saved
+    assert not (workspace / "reports" / "result.json").exists()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="CLI release target is Linux; root bypasses chmod",
+)
+def test_cli_rejects_unwritable_output_before_run(tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    try:
+        with model_server([(200, response("Done."))]) as (url, requests):
+            completed = cli(
+                tmp_path,
+                "--model",
+                "test",
+                "--base-url",
+                url,
+                "--profile",
+                "train",
+                "--output",
+                str(locked / "result.json"),
+                "Do the task",
+            )
+    finally:
+        locked.chmod(0o755)
+    assert completed.returncode == 1
+    assert "PermissionError" in completed.stderr
+    assert not (tmp_path / ".agents").exists()
+    assert not (tmp_path / ".feather" / "run.json").exists()
+    assert requests == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="CLI release target is Linux")
+def test_output_preflight_leaves_dangling_symlink_alone(tmp_path):
+    target = tmp_path / "missing" / "result.json"
+    link = tmp_path / "result.json"
+    link.symlink_to(target)
+    _require_writable_output(link)
+    assert link.is_symlink()
+    assert not target.exists()
+    assert not target.parent.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="CLI release target is Linux")
+def test_output_preflight_rejects_dangling_parent_symlink(tmp_path):
+    parent = tmp_path / "reports"
+    parent.symlink_to(tmp_path / "missing")
+    for output in (parent / "result.json", parent / "nested" / "result.json"):
+        with pytest.raises(NotADirectoryError):
+            _require_writable_output(output)
+    assert not (tmp_path / "missing").exists()
+
+
+def test_output_preflight_does_not_create_missing_directories(tmp_path):
+    output = tmp_path / "missing-workdir" / "reports" / "result.json"
+    _require_writable_output(output)
+    assert not (tmp_path / "missing-workdir").exists()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="CLI release target is Linux; root bypasses chmod",
+)
+def test_output_preflight_matches_replace_semantics(tmp_path):
+    read_only = tmp_path / "result.json"
+    read_only.write_text("old", encoding="utf-8")
+    read_only.chmod(0o444)
+    _require_writable_output(read_only)
+
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    writable = locked / "result.json"
+    writable.write_text("old", encoding="utf-8")
+    locked.chmod(0o555)
+    try:
+        with pytest.raises(PermissionError):
+            _require_writable_output(writable)
+    finally:
+        locked.chmod(0o755)
+    assert sorted(path.name for path in locked.iterdir()) == ["result.json"]
+
+
+async def test_cli_keeps_failed_run_when_output_write_fails(tmp_path, monkeypatch, caplog, capsys):
+    output = tmp_path / "reports" / "result.json"
+    result = RunResult(stop_reason="failed", num_turns=1, compactions=0, segments=())
+
+    async def fail_local(*_args, **_kwargs):
+        raise AgentRunError("model failed", cause=RuntimeError("boom"), result=result)
+
+    def save(path, payload):
+        path = Path(path)
+        if path.resolve() == output.resolve():
+            raise OSError("read-only filesystem")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload, encoding="utf-8")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr("feather_harness.cli.run_local", fail_local)
+    monkeypatch.setattr("feather_harness.cli.save_transcript", save)
+    config = LocalConfig(model="test", workspace=tmp_path, profile="train")
+    with caplog.at_level(logging.WARNING):
+        code = await run(config, "Do the task", output=output)
+    assert code == 1
+    assert "model failed" in caplog.text
+    assert "Could not write the run result to --output" in caplog.text
+    assert json.loads(capsys.readouterr().out)["stop_reason"] == "failed"
+    saved = json.loads((tmp_path / ".feather" / "run.json").read_text(encoding="utf-8"))
+    assert saved["stop_reason"] == "failed"
+    assert not output.exists()
+
+
+async def test_cli_broken_stdout_still_writes_run_files(tmp_path, monkeypatch):
+    result = RunResult(stop_reason="completed", num_turns=1, compactions=0, segments=())
+
+    async def succeed(*_args, **_kwargs):
+        return result
+
+    class BrokenStdout:
+        def write(self, _payload):
+            raise BrokenPipeError()
+
+        def flush(self):
+            raise BrokenPipeError()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr("feather_harness.cli.run_local", succeed)
+    monkeypatch.setattr(sys, "stdout", BrokenStdout())
+    output = tmp_path / "out.json"
+    config = LocalConfig(model="test", workspace=tmp_path, profile="train")
+    code = await run(config, "Do the task", output=output)
+    assert code == 0
+    saved = json.loads((tmp_path / ".feather" / "run.json").read_text(encoding="utf-8"))
+    copied = json.loads(output.read_text(encoding="utf-8"))
+    assert saved == copied
+    assert saved["stop_reason"] == "completed"
 
 
 def test_cli_web_tools_require_exa_key_before_workspace_setup(tmp_path, monkeypatch):
