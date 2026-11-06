@@ -13,7 +13,7 @@ from process_worker import managed_groups, signal_groups, start_task, terminate
 from save_transcript import save_transcript
 
 
-def emit(value):
+def emit(value: dict) -> None:
     payload = json.dumps(value, ensure_ascii=False) + "\n"
     sys.stdout.buffer.write(payload.encode("utf-8"))
     sys.stdout.buffer.flush()
