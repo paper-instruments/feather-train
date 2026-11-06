@@ -65,6 +65,8 @@ def install_task_skills(workspace: Path, skills_dir: Path) -> None:
     if not source_root.is_dir():
         raise ValueError(f"Task skills_dir is not a directory: {source_root}")
     dest_root = workspace / ".agents"
+    if dest_root.is_symlink():
+        raise FileExistsError(f"Skill installation path is a symlink: {dest_root}")
     pending = []
     for source in sorted(source_root.iterdir()):
         if source.name == "__pycache__":
@@ -72,7 +74,7 @@ def install_task_skills(workspace: Path, skills_dir: Path) -> None:
         if source.is_symlink():
             raise FileExistsError(f"Task skill path is a symlink: {source}")
         destination = dest_root / source.name
-        if destination.exists():
+        if destination.exists() or destination.is_symlink():
             raise FileExistsError(f"Task skill conflicts with installed content: {destination}")
         pending.append((source, destination))
     dest_root.mkdir(parents=True, exist_ok=True)
