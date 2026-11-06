@@ -13,6 +13,31 @@ from feather_harness.local.filesystem import SCRIPTS
 from feather_train.sandbox import remote
 
 
+async def test_unicode_tool_result_survives_ascii_container_stdio(tmp_path, monkeypatch, capsys):
+    (tmp_path / "answer.txt").write_text("café 東京", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(SCRIPTS))
+    monkeypatch.setenv("PYTHONIOENCODING", "ascii")
+    path = tmp_path / "call.json"
+    request = {
+        "name": "read",
+        "arguments": {"file_path": "answer.txt", "offset": 1, "limit": 2000},
+        "config": {
+            "workspace": str(tmp_path),
+            "read_grants": [],
+            "write_grants": [],
+        },
+        "background": False,
+        "docker": [sys.executable, str(Path(remote.__file__).with_name("call.py"))],
+    }
+
+    await remote.run(path, json.dumps(request))
+
+    saved = await remote.inspect(path, wait=True)
+    assert "failure" not in saved
+    assert "café 東京" in saved["result"]["content"]
+    assert json.loads(capsys.readouterr().out) == saved
+
+
 # The largest image read passes through unchanged just under 3.75 MB, about 5 MB of base64.
 @pytest.mark.parametrize("image_bytes", [1_100_000, 3_700_000])
 async def test_image_read_result_survives_host_publication_and_recovery(
