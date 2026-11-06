@@ -240,6 +240,8 @@ def _bind(server, session, tool, name, *, enable_image_tools=False, file_transpo
                 raise ValueError(f"MCP {item.type} output is not currently supported")
             text = item.text if item.type == "text" else str(item.model_dump(mode="json"))
             content.append({"text": text, "type": "text"})
+        if not content and result.structuredContent is not None:
+            content.append({"text": json.dumps(result.structuredContent, ensure_ascii=False), "type": "text"})
         # Preserve the pinned Chat Completions representation, including a single block.
         return ToolResult(content=content)
 
