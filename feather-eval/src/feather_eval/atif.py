@@ -152,7 +152,10 @@ def _steps(messages: tuple[Message, ...], *, copied_inputs: int = 0) -> list[Ste
                 reasoning_content=message.reasoning_content,
                 tool_calls=calls or None,
                 is_copied_context=copied,
-                extra={"refusal": message.refusal} if message.refusal is not None else None,
+                extra=_present(
+                    refusal=message.refusal,
+                    reasoning_details=list(message.reasoning_details) or None,
+                ),
             )
             for call in message.tool_calls:
                 call_steps[call.id] = step
