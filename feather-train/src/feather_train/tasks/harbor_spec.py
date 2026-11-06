@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import posixpath
 import re
+import shlex
 import tomllib
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, TypeAlias
@@ -18,6 +20,12 @@ EnvironmentMode = Literal["shared", "separate"]
 _WORKDIR_LINE = re.compile(r"^\s*WORKDIR\s+(\S+)\s*$", re.IGNORECASE)
 _FROM_LINE = re.compile(
     r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?\s*$", re.IGNORECASE
+)
+_PARSER_DIRECTIVE = re.compile(r"^#\s*(syntax|escape|check)\s*=\s*(.*?)\s*$", re.IGNORECASE)
+_SHELL_QUOTED = r"""'[^']*'|"(?:\\.|[^"\\])*"|\\."""
+_HEREDOC = re.compile(
+    rf"""(?:{_SHELL_QUOTED})|(?<!<)<<(?P<tabs>-)?[ \t]*"""
+    rf"""(?P<delimiter>(?:{_SHELL_QUOTED}|[^\s'"\\<>|&;()])+)"""
 )
 
 
@@ -114,8 +122,7 @@ def parse_image_workdir(dockerfile: str, *, where: str) -> str:
     found = None
     stage_name = None
     stages: dict[str, str | None] = {}
-    for raw in dockerfile.splitlines():
-        line = raw.split("#", 1)[0].rstrip()
+    for line in _dockerfile_instructions(dockerfile, where=where):
         stage = _FROM_LINE.match(line)
         if stage is not None:
             if stage_name is not None:
@@ -137,6 +144,50 @@ def parse_image_workdir(dockerfile: str, *, where: str) -> str:
             "set environment.workdir explicitly"
         )
     return _absolute_workdir(found, where=where)
+
+
+def _dockerfile_instructions(dockerfile: str, *, where: str) -> Iterator[str]:
+    """Yield logical instructions, excluding comments and inline file bodies."""
+    lines = iter(dockerfile.splitlines())
+    escape = "\\"
+    in_header = True
+    for raw in lines:
+        line = raw.strip()
+        directive = _PARSER_DIRECTIVE.fullmatch(line) if in_header else None
+        if directive is not None:
+            if directive.group(1).lower() == "escape" and directive.group(2) in {"\\", "`"}:
+                escape = directive.group(2)
+            continue
+        in_header = False
+        if not line or line.startswith("#"):
+            continue
+        while line.endswith(escape) and not line.endswith(escape * 2):
+            line = line[:-1]
+            for continuation in lines:
+                if continuation.strip() and not continuation.lstrip().startswith("#"):
+                    line += continuation.strip()
+                    break
+            else:
+                raise ValueError(f"{where}: Dockerfile has an unterminated continuation")
+        # JSON-form commands do not have shell heredocs. ONBUILD can wrap one.
+        command = line.split(maxsplit=1)
+        if command[0].upper() == "ONBUILD" and len(command) == 2:
+            command = command[1].split(maxsplit=1)
+        if (
+            command[0].upper() in {"RUN", "COPY", "ADD"}
+            and len(command) == 2
+            and not command[1].startswith("[")
+        ):
+            for match in _HEREDOC.finditer(command[1]):
+                if match.group("delimiter") is None:
+                    continue
+                delimiter = shlex.split(match.group("delimiter"))[0]
+                for body in lines:
+                    if (body.lstrip("\t") if match.group("tabs") else body) == delimiter:
+                        break
+                else:
+                    raise ValueError(f"{where}: Dockerfile has an unterminated heredoc")
+        yield line
 
 
 def _mcp_servers(environment: dict, *, where: str) -> tuple[McpServerSpec, ...]:

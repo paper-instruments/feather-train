@@ -256,3 +256,33 @@ def test_parse_image_workdir_can_resolve_a_later_absolute_instruction():
 def test_parse_image_workdir_requires_explicit_workdir_for_variable_expansion():
     with pytest.raises(ValueError, match="set environment.workdir explicitly"):
         parse_image_workdir("FROM debian\nWORKDIR /app\nWORKDIR $SUBDIR\n", where="img")
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "RUN printf '%s' \\\nFROM alpine\n",
+        "RUN cat <<EOF\nFROM alpine\nWORKDIR /wrong\nEOF\n",
+        "COPY <<'EOF' /example\nFROM alpine\nEOF\n",
+        "RUN cat <<-EOF <<'SECOND'\n\tFROM alpine\n\tEOF\nWORKDIR /wrong\nSECOND\n",
+    ],
+)
+def test_parse_image_workdir_ignores_instruction_text_in_shell_bodies(instruction):
+    assert parse_image_workdir(
+        "FROM debian\nWORKDIR /app\n" + instruction + "WORKDIR src\n", where="img"
+    ) == "/app/src"
+
+
+@pytest.mark.parametrize("escape", ["\\", "`"])
+def test_parse_image_workdir_joins_continued_instructions(escape):
+    assert parse_image_workdir(
+        f"# escape={escape}\nFROM debian {escape}\nAS base\n"
+        f"WORKDIR /app/{escape}\n# a comment between continued lines\nsrc\n",
+        where="img",
+    ) == "/app/src"
+
+
+def test_parse_image_workdir_does_not_treat_quoted_text_as_a_heredoc():
+    assert parse_image_workdir(
+        "FROM debian\nRUN echo '<<EOF'\nWORKDIR /app\n", where="img"
+    ) == "/app"
