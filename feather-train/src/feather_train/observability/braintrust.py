@@ -16,6 +16,7 @@ from typing import Any, Literal
 import braintrust
 from feather_harness.core.messages import Message
 from feather_harness.core.model import ChatCompletionsModel, ModelCall, ModelSettings, UsageTotals
+from feather_harness.core.token_budget import PromptTokenBudget
 from feather_harness.tools import Tool, ToolResult, ToolSpec
 from openai import AsyncOpenAI
 
@@ -286,6 +287,10 @@ class _TracedModel:
             )
         )
         self.window_open = True
+
+    @property
+    def prompt_token_budget(self) -> PromptTokenBudget | None:
+        return self.model.prompt_token_budget
 
     async def complete(
         self,

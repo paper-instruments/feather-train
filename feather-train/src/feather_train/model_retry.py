@@ -69,6 +69,10 @@ class RetryingModel:
         self.waited_seconds = 0.0
         self.retries = 0
 
+    @property
+    def prompt_token_budget(self):
+        return self.model.prompt_token_budget
+
     async def complete(self, messages, **kwargs):
         backoff = self.config.initial_backoff_seconds
         holding_gate = False

@@ -19,6 +19,7 @@ from feather_harness.production import (
     PRODUCTION_TOOL_DESCRIPTIONS,
     VISION_DISABLED_FACT,
     build_production_instructions,
+    production_compaction,
 )
 from feather_harness.prompt import RESOURCE_ROOT, build_instructions
 from feather_harness.scripts.install_skills import (
@@ -281,6 +282,30 @@ async def test_production_compaction_prompt_replaces_only_the_default(
             "Do the task", model=model, workspace=tmp_path, profile=profile, compaction=compaction
         )
     assert requests[0]["messages"][-1]["content"].startswith(expected)
+
+
+@pytest.mark.parametrize(
+    "profile, settings, compactions",
+    [("prod", {}, 1), ("prod", {"enabled": False}, 0), ("train", {}, 0)],
+)
+async def test_only_production_compacts_by_default_and_explicit_disable_wins(
+    tmp_path: Path, profile: str, settings: dict, compactions: int
+) -> None:
+    # Harbor and the CLI pass compaction as JSON, so the profile default must survive it.
+    compaction = CompactionConfig.model_validate_json(
+        CompactionConfig(context_window_tokens=30001, **settings).model_dump_json()
+    )
+    async with _model(response("Summary."), response("Done.")) as (model, _):
+        result = await run_local(
+            "Do the task", model=model, workspace=tmp_path, profile=profile, compaction=compaction
+        )
+    assert result.compactions == compactions
+
+
+def test_production_compaction_keeps_the_default_trigger() -> None:
+    config = production_compaction(CompactionConfig())
+    assert config.enabled
+    assert config.threshold_tokens == 101_072
 
 
 @pytest.mark.parametrize("profile, requests_sent", [("prod", 2), ("train", 1)])

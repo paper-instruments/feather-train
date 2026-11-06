@@ -214,6 +214,8 @@ async def test_compaction_does_not_consume_agent_turn_budget(trace):
     completed_tools = []
 
     class Model:
+        prompt_token_budget = None
+
         async def complete(self, context, *, settings, tools=(), kind="agent"):
             assert limits.reached(trace) is None
             calls.append(kind)

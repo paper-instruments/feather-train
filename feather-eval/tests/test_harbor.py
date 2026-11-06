@@ -163,7 +163,7 @@ print('probe diagnostic', file=sys.stderr)
     assert settings["max_tokens"] == condition.get("model_settings", {}).get("max_tokens")
     assert received["config"]["max_turns"] == condition.get("max_turns", 100)
     compaction = received["config"]["compaction"]
-    assert compaction["enabled"] == condition.get("compaction", {}).get("enabled", False)
+    assert compaction["enabled"] == condition.get("compaction", {}).get("enabled")
     for key, value in condition.get("compaction", {}).items():
         assert compaction[key] == value
     assert received["config"]["enable_image_tools"] == condition.get("enable_image_tools", False)

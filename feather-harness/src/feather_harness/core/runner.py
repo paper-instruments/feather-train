@@ -18,6 +18,7 @@ from .compaction import (
     build_compaction_inputs,
     build_summary,
     check_compaction,
+    estimate_tokens,
 )
 from .messages import (
     AssistantMessage,
@@ -231,12 +232,32 @@ class FeatherAgent:
                         SystemMessage(content=DEFAULT_POLICY_COMPACTION_SYSTEM_PROMPT),
                         *summary_input,
                     ]
+                    summary_max_tokens = self.compaction.max_tokens
+                    # An exact prompt token budget clamps the summary limit in the model.
+                    if self.model.prompt_token_budget is None:
+                        # Endpoints that enforce prompt + max_tokens <= window reject a
+                        # limit larger than the room the summary prompt leaves. Its history
+                        # was part of the estimated context, so that estimate plus the added
+                        # instructions bounds it; a direct estimate is tighter when the
+                        # dropped recent turns hold most of the context.
+                        added_tokens = estimate_tokens((compaction_input[0], compaction_input[-1]))
+                        prompt_tokens = min(
+                            compaction_tokens + added_tokens, estimate_tokens(compaction_input)
+                        )
+                        window = self.compaction.context_window_tokens
+                        if prompt_tokens >= window:
+                            raise ValueError(
+                                f"compaction summary prompt is estimated at {prompt_tokens} "
+                                f"tokens; no output room remains in the {window}-token "
+                                "context window"
+                            )
+                        summary_max_tokens = min(summary_max_tokens, window - prompt_tokens)
                     for attempt in range(1, _COMPACTION_MAX_ATTEMPTS + 1):
                         state.start_segment("compaction", list(compaction_input))
                         summary_call = await self.model.complete(
                             state.context,
                             settings=request.model_settings.model_copy(
-                                update={"max_tokens": self.compaction.max_tokens}
+                                update={"max_tokens": summary_max_tokens}
                             ),
                             kind="compaction",
                         )

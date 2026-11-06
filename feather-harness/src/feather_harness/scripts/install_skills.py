@@ -89,7 +89,7 @@ def _production_files(root: Path, skills_path: str) -> list[tuple[Path, bytes]]:
     guidance_root = BUNDLE_ROOT / "production_skills"
 
     def guidance(path: Path) -> bytes:
-        return render_skills_path(path.read_text(), skills_path).encode()
+        return render_skills_path(path.read_text(encoding="utf-8"), skills_path).encode("utf-8")
 
     files = [(root / DESIGN_GUIDE, guidance(guidance_root / DESIGN_GUIDE))]
     for guide in sorted(guidance_root.glob("*.md")):
@@ -121,7 +121,9 @@ def _write_files(files: list[tuple[Path, bytes]], workspace: Path, *, overwrite:
                 raise FileExistsError(f"Skill installation parent is not a directory: {path}")
         if destination.exists():
             if not destination.is_file():
-                raise FileExistsError(f"Skill installation path is not a regular file: {destination}")
+                raise FileExistsError(
+                    f"Skill installation path is not a regular file: {destination}"
+                )
             if destination.read_bytes() == content:
                 continue
             if not overwrite:

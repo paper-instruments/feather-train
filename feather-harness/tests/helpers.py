@@ -7,6 +7,8 @@ from feather_harness.core.model import ModelCall
 
 
 class ScriptedModel:
+    prompt_token_budget = None
+
     def __init__(self, *messages, tokens=10):
         self.messages = iter(messages)
         self.tokens = tokens

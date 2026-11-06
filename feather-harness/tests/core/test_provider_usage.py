@@ -149,6 +149,8 @@ async def test_replayed_reasoning_text_is_not_counted_as_hidden():
 class _BilledModel:
     """Scripted model whose calls each bill reasoning that never returns to context."""
 
+    prompt_token_budget = None
+
     def __init__(self, *messages):
         self.messages = iter(messages)
         self.number = 0

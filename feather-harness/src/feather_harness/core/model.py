@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 import httpx
-from openai import APIConnectionError, APIStatusError
+from openai import APIConnectionError, APIError, APIStatusError
 from openai.types.chat import ChatCompletion
 from pydantic import Field, JsonValue, model_validator
 
@@ -192,6 +192,30 @@ class TruncatedStreamError(RuntimeError):
 
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+_NON_RETRYABLE_STREAM_ERRORS = frozenset({
+    "invalid_request_error", "authentication_error", "permission_error", "permission_denied",
+    "not_found_error", "model_not_found",
+    "insufficient_quota", "context_length_exceeded", "content_filter", "content_policy_violation",
+})
+
+
+def _is_retryable_error(
+    exc: APIError | httpx.TransportError | TruncatedStreamError, *, stream: bool,
+) -> bool:
+    if isinstance(exc, APIStatusError):
+        return exc.status_code in _RETRYABLE_STATUS_CODES
+    if isinstance(exc, (APIConnectionError, httpx.TransportError, TruncatedStreamError)):
+        return True
+    if not stream or type(exc) is not APIError:
+        return False
+    # The SDK raises a bare APIError for SSE error events after HTTP 200. These
+    # incomplete responses are safe to discard: no partial tool calls were executed.
+    code, error_type = str(exc.code), str(exc.type)
+    if {code, error_type} & _NON_RETRYABLE_STREAM_ERRORS:
+        return False
+    if code.isdigit():
+        return int(code) in _RETRYABLE_STATUS_CODES
+    return True
 
 
 class ChatCompletionsModel:
@@ -327,10 +351,9 @@ class ChatCompletionsModel:
         while True:
             try:
                 return await self._send(request)
-            except (APIConnectionError, APIStatusError, httpx.TransportError, TruncatedStreamError) as exc:
-                status = exc.status_code if isinstance(exc, APIStatusError) else None
-                if attempt == self.retry.max_attempts or (
-                    status is not None and status not in _RETRYABLE_STATUS_CODES
+            except (APIError, httpx.TransportError, TruncatedStreamError) as exc:
+                if attempt == self.retry.max_attempts or not _is_retryable_error(
+                    exc, stream=self.stream,
                 ):
                     raise
                 delay = min(

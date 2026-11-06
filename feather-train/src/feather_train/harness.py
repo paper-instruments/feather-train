@@ -17,7 +17,7 @@ from feather_harness.core.messages import AssistantMessage, SystemMessage
 from feather_harness.core.model import ChatCompletionsModel, ModelSettings
 from feather_harness.core.runner import AgentRunError, RunResult
 from feather_harness.core.token_budget import PromptTokenBudget
-from feather_harness.production import Profile
+from feather_harness.production import Profile, production_compaction
 from feather_harness.tools.web import WEB_TOOL_NAMES
 from feather_harness.tools.web.exa import ExaConfigurationError, ExaWebProvider
 from openai import AsyncOpenAI
@@ -188,13 +188,16 @@ class FeatherHarness(vf.Harness[FeatherHarnessConfig]):
         trace_error = str(error) if error is not None else None
         if trace.errors:
             trace_error = trace.errors[-1].message
+        compaction = self.config.compaction
+        if self.config.profile == "prod":
+            compaction = production_compaction(compaction)
         try:
             self.braintrust.close_rollout(
                 trace.id,
                 metrics=braintrust_close_metrics(trace, grading_score=rollout.grading_score),
                 metadata={
                     "profile": self.config.profile,
-                    "compaction_mode": "policy" if self.config.compaction.enabled else None,
+                    "compaction_mode": "policy" if compaction.enabled else None,
                     "stop_condition": trace.stop_condition,
                     # Empty cancellation messages must not erase the recorded failure phase.
                     "error": trace_error or None,

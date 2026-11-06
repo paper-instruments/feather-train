@@ -145,7 +145,8 @@ cat task.txt | ~/.local/bin/feather --config config.json - > run.json
 ```
 
 CLI flags override matching config fields. The workspace must already exist. Choose
-an actual model-supported context window; compaction is disabled unless enabled.
+an actual model-supported context window. The `prod` profile compacts unless
+`"enabled": false` is set; the `train` profile compacts only with `"enabled": true`.
 See [LocalConfig](../src/feather_harness/cli.py)
 and [tool configuration](tools.md) for the full interfaces.
 

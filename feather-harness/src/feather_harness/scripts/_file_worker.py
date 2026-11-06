@@ -18,6 +18,8 @@ async def run_file_worker(name: str, payload: bytes) -> tuple[int, bytes, bytes]
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        # The JSON protocol is UTF-8 even when the host uses a legacy locale.
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         start_new_session=True,
     )
     timeout_seconds = SEARCH_TIMEOUT_SECONDS if name in {"grep", "glob"} else None

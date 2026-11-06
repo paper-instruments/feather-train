@@ -49,6 +49,16 @@ Harbor explicitly defaults to `profile=prod`, which uses professional production
 prompting and guidance. Use `--ak profile=train` to reproduce the minimal training
 profile instead.
 
+For the Ultramarine evaluation starting condition, use the
+[reference configuration](examples/ultramarine.yaml) and its
+[setup and provenance guide](../feather-harness/docs/evaluation.md). It explicitly
+enables compaction, image reads, and our evaluation sampling settings. The default
+`prod` profile compacts unless the Harbor agent config sets
+`kwargs.compaction.enabled: false`; `train` compacts only when enabled.
+**The adapter does not install Paper packages into the task Python environment by
+default.** Prepare the task image as described below before running document
+evaluations.
+
 For a vision-capable endpoint, pass `--ak enable_image_tools=true` (or set
 `kwargs.enable_image_tools: true` in the Harbor agent config). This enables images
 through `read` for PNG/JPEG/GIF/WebP files in both profiles and image results from MCP tools. Render

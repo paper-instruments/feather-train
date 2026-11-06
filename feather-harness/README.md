@@ -38,6 +38,10 @@ This harness contains the prompts we've tuned for internal testing. Start with:
 See [Prompting](https://docs.paperinstruments.com/docs/ultramarine/prompting) in the
 Ultramarine docs for request settings such as reasoning effort and sampling.
 
+For Harbor evaluations, start with the [Ultramarine evaluation reference](docs/evaluation.md)
+and its runnable configuration. It makes compaction, sampling, image tools, and
+task-environment package requirements explicit.
+
 ## How it works
 
 The whole harness is a few small pieces. If you want to rebuild it yourself, these
@@ -112,9 +116,13 @@ the system prompt lists each skill's name and description. The model reads the
 
 ### Context compaction
 
-Compaction is off by default in the CLI and `run_local`; enable it with
-`"compaction": {"enabled": true, "context_window_tokens": ...}` set to your model's
-real window. Feather Train's training and eval configs turn it on. It lives in
+The `prod` profile (the default for the CLI, `run_local`, and Harbor) compacts by
+default; the `train` profile and direct `FeatherAgent` use do not. With the default
+131,072-token window, compaction triggers at 101,072 estimated tokens; set
+`"compaction": {"context_window_tokens": ...}` to your model's real window. Turn it
+off with `"compaction": {"enabled": false}` (or `CompactionConfig(enabled=False)`),
+or on in `train` with `"enabled": true`. Feather Train's training and eval configs
+turn it on. It lives in
 [`core/compaction.py`](src/feather_harness/core/compaction.py), called from the loop
 in [`core/runner.py`](src/feather_harness/core/runner.py).
 

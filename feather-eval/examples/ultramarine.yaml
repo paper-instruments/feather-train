@@ -1,0 +1,42 @@
+# Run from the repository root after building the Harness wheel.
+# See feather-harness/docs/evaluation.md for task-image preparation and provenance.
+job_name: ultramarine-feather-prod
+n_attempts: 1
+n_concurrent_trials: 1
+retry:
+  max_retries: 0
+agents:
+  - name: feather_eval.harbor:FeatherHarborAgent
+    model_name: ultramarine-1-flash
+    override_timeout_sec: 3600
+    env:
+      OPENAI_API_KEY: ${PAPERINSTRUMENTS_API_KEY}
+      EXA_API_KEY: ${EXA_API_KEY}
+    kwargs:
+      wheel: dist/feather_harness-0.1.0-py3-none-any.whl
+      base_url: https://api.paperinstruments.com/v1
+      profile: prod
+      enable_image_tools: true
+      enable_web_tools: true
+      max_turns: 500
+      model_settings:
+        temperature: 1.0
+        top_p: 0.95
+        reasoning_effort: max
+        # Includes reasoning and answer/tool tokens.
+        max_tokens: 131072
+      prompt_token_budget:
+        processor_name: zai-org/GLM-5.3-Flash
+        processor_revision: eb9eb208eb0d988989d07a6a12d0fdeb5f52574a
+        context_window_tokens: 131072
+      compaction:
+        enabled: true
+        context_window_tokens: 131072
+        trigger_tokens: 101072
+        max_tokens: 131072
+        min_turns_before_compaction: 0
+        keep_recent_turns: 2
+tasks:
+  - path: feather-eval/tasks/file-smoke
+environment:
+  type: docker

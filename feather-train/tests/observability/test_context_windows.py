@@ -8,11 +8,13 @@ from contextvars import ContextVar
 import httpx
 import pytest
 from feather_harness import AgentRunError, ChatCompletionsModel, CompactionConfig
+from feather_harness.core.token_budget import PromptTokenBudget
 from feather_harness.tools import ToolResult
 from feather_harness.tools.todo import TodoList
 from openai import AsyncOpenAI
 
 from feather_train import E2BRuntime, run_e2b
+from feather_train.model_retry import EndpointGate, ModelRetryConfig, RetryingModel
 from feather_train.observability.braintrust import BraintrustRollout
 
 current_span = ContextVar("test_span", default=None)
@@ -357,5 +359,23 @@ async def test_malformed_tool_arguments_are_logged_without_masking_tool_error():
         assert tool.logged["output"] == result.content
         assert tool.logged["error"] == result.error
         assert tool.closed
+    finally:
+        rollout.close()
+
+
+async def test_wrapped_models_expose_the_prompt_token_budget():
+    # The agent loop reads the budget to leave the summary limit to the model's exact clamp.
+    budget = PromptTokenBudget(
+        processor_name="zai-org/GLM-5.3-Flash",
+        processor_revision="eb9eb208eb0d988989d07a6a12d0fdeb5f52574a",
+        context_window_tokens=131072,
+    )
+    model = ChatCompletionsModel(client=None, model="glm", prompt_token_budget=budget)
+    retrying = RetryingModel(model, ModelRetryConfig(), EndpointGate())
+    rollout = BraintrustRollout(Span())
+    try:
+        with rollout.trace_agent(retrying) as traced:
+            assert retrying.prompt_token_budget is budget
+            assert traced.prompt_token_budget is budget
     finally:
         rollout.close()

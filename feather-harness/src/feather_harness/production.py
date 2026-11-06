@@ -79,7 +79,11 @@ def production_tools(tools: tuple[Tool, ...], *, image_reads: bool) -> tuple[Too
 
 
 def production_compaction(config: CompactionConfig) -> CompactionConfig:
-    """Use the production continuation prompt unless the caller supplied its own."""
-    if config.prompt != DEFAULT_COMPACTION_PROMPT:
-        return config
-    return config.model_copy(update={"prompt": PRODUCTION_COMPACTION_PROMPT})
+    """Enable compaction unless explicitly disabled, and use the production continuation
+    prompt unless the caller supplied its own."""
+    update: dict[str, object] = {}
+    if config.enabled is None:
+        update["enabled"] = True
+    if config.prompt == DEFAULT_COMPACTION_PROMPT:
+        update["prompt"] = PRODUCTION_COMPACTION_PROMPT
+    return config.model_copy(update=update)
