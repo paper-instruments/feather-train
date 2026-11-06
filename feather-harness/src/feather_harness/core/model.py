@@ -283,10 +283,7 @@ class ChatCompletionsModel:
         choice = response.choices[0]
         message = choice.message
         raw = message.model_dump(mode="json", exclude_unset=True)
-        if raw.get("thinking_blocks"):
-            raise ValueError("Signed thinking-block replay is not currently supported")
-        if raw.get("audio"):
-            raise ValueError("Audio is not currently supported")
+        _check_supported_payload(raw)
         calls = []
         for call in message.tool_calls or ():
             if call.type != "function":
@@ -367,7 +364,15 @@ class ChatCompletionsModel:
         stream = await self.client.chat.completions.create(
             **request, stream=True, stream_options={"include_usage": True}
         )
-        return await _collect_stream(stream)
+        async with stream:
+            return await _collect_stream(stream)
+
+
+def _check_supported_payload(payload: dict[str, JsonValue]) -> None:
+    if payload.get("thinking_blocks"):
+        raise ValueError("Signed thinking-block replay is not currently supported")
+    if payload.get("audio"):
+        raise ValueError("Audio is not currently supported")
 
 
 async def _collect_stream(stream) -> ChatCompletion:
@@ -385,6 +390,7 @@ async def _collect_stream(stream) -> ChatCompletion:
             continue
         choice = chunk.choices[0]
         delta = choice.delta.model_dump(mode="json", exclude_none=True)
+        _check_supported_payload(delta)
         content.append(delta.get("content") or "")
         reasoning.append(delta.get("reasoning_content") or delta.get("reasoning") or "")
         refusal.append(delta.get("refusal") or "")
