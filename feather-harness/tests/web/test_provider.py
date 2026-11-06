@@ -95,12 +95,13 @@ async def test_search_skips_a_source_url_the_tools_cannot_render(url):
     assert len(requests) == 1
 
 
-async def test_fetch_resolved_to_a_non_public_url_is_unavailable_without_retry():
+@pytest.mark.parametrize("content", ["Evidence", "x" * 101])
+async def test_fetch_resolved_to_a_non_public_url_is_unavailable_without_retry(content):
     requests = []
 
     def respond(request):
         requests.append(request)
-        return httpx.Response(200, json=fetched_page(url="http://10.0.0.5/article"))
+        return httpx.Response(200, json=fetched_page(url="http://10.0.0.5/article", text=content))
 
     result = await provider_for(respond).fetch(URL, max_characters=100)
     assert result == WebFetchUnavailable(reason="not_available")

@@ -380,13 +380,13 @@ def _parse_fetch_result(
         raise ExaResponseError("Exa contents result contained an invalid title")
     if not isinstance(content, str):
         raise ExaResponseError("Exa contents result did not contain text")
-    if len(content) > max_characters:
-        raise ExaResponseError(f"Exa contents result exceeded {max_characters} characters")
     if not _is_renderable_url(resolved_url):
         # Exa may resolve a public URL to a location the tool cannot render; retrying cannot
         # change that, so the model gets an ordinary unavailable source.
         logger.warning("Exa resolved a fetch to a non-public or invalid URL")
         return WebFetchUnavailable(reason="not_available")
+    if len(content) > max_characters:
+        raise ExaResponseError(f"Exa contents result exceeded {max_characters} characters")
     try:
         return WebFetchResult(
             url=resolved_url,
