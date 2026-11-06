@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import posixpath
 import re
+import shlex
 import tomllib
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, TypeAlias
@@ -15,6 +18,13 @@ NetworkMode = Literal["public", "no-network"]
 EnvironmentMode = Literal["shared", "separate"]
 
 _WORKDIR_LINE = re.compile(r"^\s*WORKDIR\s+(\S+)\s*$", re.IGNORECASE)
+_FROM_LINE = re.compile(
+    r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?\s*$", re.IGNORECASE
+)
+_PARSER_DIRECTIVE = re.compile(r"^#\s*(syntax|escape|check)\s*=\s*(.*?)\s*$", re.IGNORECASE)
+_SHELL_QUOTED = r"""'[^']*'|"(?:\\.|[^"\\])*"|\\."""
+_SHELL_WORD = re.compile(rf"""(?:{_SHELL_QUOTED}|[^\s'"\\])+""")
+_HEREDOC = re.compile(r"^\d*<<(?P<tabs>-?)(?P<delimiter>[^<]*)$")
 
 
 class CollectHook(BaseModel):
@@ -106,17 +116,79 @@ def parse_harbor_spec(
 
 
 def parse_image_workdir(dockerfile: str, *, where: str) -> str:
-    """Last Dockerfile WORKDIR, which is the official Harbor agent cwd."""
+    """Resolve the final stage's WORKDIR without guessing a base image's cwd."""
     found = None
-    for raw in dockerfile.splitlines():
-        line = raw.split("#", 1)[0].rstrip()
+    stage_name = None
+    stages: dict[str, str | None] = {}
+    for line in _dockerfile_instructions(dockerfile, where=where):
+        stage = _FROM_LINE.match(line)
+        if stage is not None:
+            if stage_name is not None:
+                stages[stage_name.lower()] = found
+            found = stages.get(stage.group(1).lower())
+            stage_name = stage.group(2)
+            continue
         match = _WORKDIR_LINE.match(line)
         if match is None:
             continue
-        found = match.group(1).strip().strip("\"'")
+        value = match.group(1).strip().strip("\"'")
+        if "$" in value or (not value.startswith("/") and found is None):
+            found = None
+            continue
+        found = posixpath.normpath(posixpath.join(found or "/", value))
     if found is None:
-        raise ValueError(f"{where}: Dockerfile has no WORKDIR")
+        raise ValueError(
+            f"{where}: Dockerfile final stage has no resolvable absolute WORKDIR; "
+            "set environment.workdir explicitly"
+        )
     return _absolute_workdir(found, where=where)
+
+
+def _dockerfile_instructions(dockerfile: str, *, where: str) -> Iterator[str]:
+    """Yield logical instructions, excluding comments and inline file bodies."""
+    lines = iter(dockerfile.splitlines())
+    escape = "\\"
+    in_header = True
+    for raw in lines:
+        line = raw.strip()
+        directive = _PARSER_DIRECTIVE.fullmatch(line) if in_header else None
+        if directive is not None:
+            if directive.group(1).lower() == "escape" and directive.group(2) in {"\\", "`"}:
+                escape = directive.group(2)
+            continue
+        in_header = False
+        if not line or line.startswith("#"):
+            continue
+        while line.endswith(escape) and not line.endswith(escape * 2):
+            line = line[:-1]
+            for continuation in lines:
+                if continuation.strip() and not continuation.lstrip().startswith("#"):
+                    line += continuation.strip()
+                    break
+            else:
+                raise ValueError(f"{where}: Dockerfile has an unterminated continuation")
+        # JSON-form commands do not have shell heredocs. ONBUILD can wrap one.
+        command = line.split(maxsplit=1)
+        if command[0].upper() == "ONBUILD" and len(command) == 2:
+            command = command[1].split(maxsplit=1)
+        if (
+            command[0].upper() in {"RUN", "COPY", "ADD"}
+            and len(command) == 2
+            and not command[1].startswith("[")
+        ):
+            # Docker recognizes heredoc markers as whole shell words, not shifts
+            # inside arithmetic or filenames containing the same characters.
+            for word in _SHELL_WORD.finditer(command[1]):
+                match = _HEREDOC.fullmatch(word.group())
+                if match is None or not match.group("delimiter"):
+                    continue
+                delimiter = shlex.split(match.group("delimiter"))[0]
+                for body in lines:
+                    if (body.lstrip("\t") if match.group("tabs") else body) == delimiter:
+                        break
+                else:
+                    raise ValueError(f"{where}: Dockerfile has an unterminated heredoc")
+        yield line
 
 
 def _mcp_servers(environment: dict, *, where: str) -> tuple[McpServerSpec, ...]:
