@@ -254,14 +254,15 @@ def test_cli_returns_partial_json_after_exhausting_request_retries(tmp_path):
     assert requests[0] == requests[1] == requests[2]
 
 
-def test_cli_exchanges_task_text_and_result_as_utf8_with_ascii_stdio(tmp_path):
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_cli_exchanges_task_text_and_result_as_utf8_with_ascii_stdio(tmp_path, newline):
     task = "Rédigez le rapport — 报告\n"
     with model_server([(200, response("Terminé — 完成"))]) as (url, requests):
         completed = subprocess.run(
             [sys.executable, "-m", "feather_harness", "--model", "test", "--base-url", url, "-"],
             cwd=tmp_path,
             env={**os.environ, "OPENAI_API_KEY": "test-key", "PYTHONIOENCODING": "ascii"},
-            input=task.encode("utf-8"),
+            input=task.replace("\n", newline).encode("utf-8"),
             capture_output=True,
             timeout=15,
         )

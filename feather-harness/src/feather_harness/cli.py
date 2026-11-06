@@ -123,7 +123,11 @@ def main() -> int:
             if getattr(args, name) is not None
         }
         config = LocalConfig.model_validate({**values, **overrides})
-        prompt = sys.stdin.buffer.read().decode("utf-8") if args.prompt == "-" else args.prompt
+        if args.prompt == "-":
+            sys.stdin.reconfigure(encoding="utf-8", newline=None)
+            prompt = sys.stdin.read()
+        else:
+            prompt = args.prompt
         if not prompt.strip():
             raise ValueError("Task instructions must not be empty")
         return asyncio.run(run(config, prompt))
