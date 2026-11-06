@@ -70,6 +70,21 @@ async def test_headers_are_sent_to_server():
         assert all(headers[b"x-test"] == b"present" for headers in server.headers)
 
 
+async def test_discovery_includes_and_dispatches_tools_from_every_page():
+    names = ("first", "second", "third", "fourth", "fifth")
+    with mcp_server(tool_names=names, page_size=2) as (url, server):
+
+        async def run(tools):
+            assert [tool.spec.name for tool in tools] == [f"mcp__mail__{name}" for name in names]
+            result = await tools[-1].invoke('{"value":"last page"}')
+            assert result.content[-1] == {"text": "last page", "type": "text"}
+            return completed()
+
+        await run_with_mcp((McpServerSpec(name="mail", transport="http", url=url + "/mcp/"),), run)
+        assert server.list_calls == 3
+        assert server.calls == [("fifth", {"value": "last page"})]
+
+
 async def test_discovery_retries_after_transient_failure():
     with mcp_server(discovery_failures=1) as (url, server):
 

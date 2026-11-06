@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+from mcp.types import ListToolsResult
 from mcp.types import Tool as MCPTool
 
 from feather_harness import McpServerSpec, run_with_mcp
@@ -60,8 +61,8 @@ def connections(monkeypatch):
             if self.url == state.fail_connect:
                 raise RuntimeError("initialization failed")
 
-        async def list_tools(self):
-            return SimpleNamespace(tools=[MCPTool(name="change", inputSchema={"type": "object"})])
+        async def list_tools(self, cursor: str | None = None) -> ListToolsResult:
+            return ListToolsResult(tools=[MCPTool(name="change", inputSchema={"type": "object"})])
 
     monkeypatch.setattr(adapter, "streamable_http_client", streams)
     monkeypatch.setattr(adapter, "ClientSession", Session)

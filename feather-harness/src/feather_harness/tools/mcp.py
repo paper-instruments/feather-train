@@ -159,16 +159,21 @@ async def _connect_tools(stack, servers, reserved_names, enable_image_tools=Fals
                 )
             )
             await session.initialize()
-        for attempt in range(3):
-            try:
-                listing = await session.list_tools()
+        cursor = None
+        while True:
+            for attempt in range(3):
+                try:
+                    listing = await session.list_tools(cursor=cursor)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    logger.warning("MCP discovery failed for %s; retrying", server.name)
+                    await asyncio.sleep(attempt + 1)
+            discovered.extend((server, session, tool) for tool in listing.tools)
+            cursor = listing.nextCursor
+            if cursor is None:
                 break
-            except Exception:
-                if attempt == 2:
-                    raise
-                logger.warning("MCP discovery failed for %s; retrying", server.name)
-                await asyncio.sleep(attempt + 1)
-        discovered.extend((server, session, tool) for tool in listing.tools)
     names = _tool_names(discovered, reserved_names)
     return tuple(
         _bind(server, session, tool, name, enable_image_tools=enable_image_tools, file_transport=file_transport)
