@@ -86,6 +86,8 @@ class RetryingModel:
                 call = await self.model.complete(messages, **kwargs)
             except Exception as exc:
                 if not self._retryable(exc):
+                    if holding_gate:
+                        self.gate.mark_up()
                     raise
                 remaining = self._remaining()
                 if remaining <= 0:
@@ -111,6 +113,10 @@ class RetryingModel:
                     raise
                 backoff = min(backoff * 2, self.config.max_backoff_seconds)
                 continue
+            except BaseException:
+                if holding_gate:
+                    self.gate.mark_up()
+                raise
             self.gate.mark_up()
             return call
 
