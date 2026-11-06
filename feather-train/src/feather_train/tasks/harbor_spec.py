@@ -23,10 +23,8 @@ _FROM_LINE = re.compile(
 )
 _PARSER_DIRECTIVE = re.compile(r"^#\s*(syntax|escape|check)\s*=\s*(.*?)\s*$", re.IGNORECASE)
 _SHELL_QUOTED = r"""'[^']*'|"(?:\\.|[^"\\])*"|\\."""
-_HEREDOC = re.compile(
-    rf"""(?:{_SHELL_QUOTED})|(?<!<)<<(?P<tabs>-)?[ \t]*"""
-    rf"""(?P<delimiter>(?:{_SHELL_QUOTED}|[^\s'"\\<>|&;()])+)"""
-)
+_SHELL_WORD = re.compile(rf"""(?:{_SHELL_QUOTED}|[^\s'"\\])+""")
+_HEREDOC = re.compile(r"^\d*<<(?P<tabs>-?)(?P<delimiter>[^<]*)$")
 
 
 class CollectHook(BaseModel):
@@ -178,8 +176,11 @@ def _dockerfile_instructions(dockerfile: str, *, where: str) -> Iterator[str]:
             and len(command) == 2
             and not command[1].startswith("[")
         ):
-            for match in _HEREDOC.finditer(command[1]):
-                if match.group("delimiter") is None:
+            # Docker recognizes heredoc markers as whole shell words, not shifts
+            # inside arithmetic or filenames containing the same characters.
+            for word in _SHELL_WORD.finditer(command[1]):
+                match = _HEREDOC.fullmatch(word.group())
+                if match is None or not match.group("delimiter"):
                     continue
                 delimiter = shlex.split(match.group("delimiter"))[0]
                 for body in lines:

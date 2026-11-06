@@ -286,3 +286,24 @@ def test_parse_image_workdir_does_not_treat_quoted_text_as_a_heredoc():
     assert parse_image_workdir(
         "FROM debian\nRUN echo '<<EOF'\nWORKDIR /app\n", where="img"
     ) == "/app"
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "RUN echo $((1 << 2))",
+        "RUN echo $((1<<2))",
+        "COPY source<<x /app/",
+    ],
+)
+def test_parse_image_workdir_does_not_treat_embedded_shifts_as_heredocs(instruction):
+    assert parse_image_workdir(
+        f"FROM debian\n{instruction}\nWORKDIR /app\n", where="img"
+    ) == "/app"
+
+
+def test_parse_image_workdir_consumes_heredoc_with_file_descriptor():
+    assert parse_image_workdir(
+        "FROM debian\nWORKDIR /app\nRUN cat 3<<'EOF'\nFROM alpine\nEOF\n",
+        where="img",
+    ) == "/app"
