@@ -129,8 +129,8 @@ def _steps(messages: tuple[Message, ...], *, copied_inputs: int = 0) -> list[Ste
             calls = []
             for call in message.tool_calls:
                 try:
-                    arguments = json.loads(call.arguments)
-                except json.JSONDecodeError:
+                    arguments = json.loads(call.arguments, parse_constant=_reject_json_constant)
+                except ValueError:
                     arguments = None
                 # ATIF requires an object; preserve malformed/non-object requests losslessly.
                 extra = None
@@ -165,6 +165,10 @@ def _steps(messages: tuple[Message, ...], *, copied_inputs: int = 0) -> list[Ste
             )
         steps.append(step)
     return steps
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"Invalid JSON constant: {value}")
 
 
 def _attach_usage(steps: list[Step], calls: tuple[ProviderUsage, ...]) -> None:
