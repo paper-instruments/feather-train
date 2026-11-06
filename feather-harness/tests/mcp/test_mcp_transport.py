@@ -79,6 +79,7 @@ async def test_structured_only_tool_result_is_visible_to_the_model():
             assert len(result.content) == 1
             assert result.content[0]["type"] == "text"
             assert json.loads(result.content[0]["text"]) == data
+            assert "résumé" in result.content[0]["text"]
             return completed()
 
         await run_with_mcp((McpServerSpec(name="mail", transport="http", url=url + "/mcp/"),), run)
