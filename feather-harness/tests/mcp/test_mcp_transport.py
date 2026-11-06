@@ -70,6 +70,31 @@ async def test_headers_are_sent_to_server():
         assert all(headers[b"x-test"] == b"present" for headers in server.headers)
 
 
+async def test_structured_only_tool_result_is_visible_to_the_model():
+    data = {"count": 2, "items": ["résumé", "report"]}
+    with mcp_server(text_blocks=[], structured_content=data) as (url, _):
+
+        async def run(tools):
+            result = await tools[0].invoke('{"value":"query"}')
+            assert len(result.content) == 1
+            assert result.content[0]["type"] == "text"
+            assert json.loads(result.content[0]["text"]) == data
+            return completed()
+
+        await run_with_mcp((McpServerSpec(name="mail", transport="http", url=url + "/mcp/"),), run)
+
+
+async def test_structured_result_does_not_duplicate_existing_content():
+    with mcp_server(text_blocks=["Two items"], structured_content={"count": 2}) as (url, _):
+
+        async def run(tools):
+            result = await tools[0].invoke('{"value":"query"}')
+            assert result.content == [{"text": "Two items", "type": "text"}]
+            return completed()
+
+        await run_with_mcp((McpServerSpec(name="mail", transport="http", url=url + "/mcp/"),), run)
+
+
 async def test_discovery_retries_after_transient_failure():
     with mcp_server(discovery_failures=1) as (url, server):
 
