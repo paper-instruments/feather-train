@@ -14,7 +14,9 @@ from save_transcript import save_transcript
 
 
 def emit(value):
-    print(json.dumps(value, ensure_ascii=False), flush=True)
+    payload = json.dumps(value, ensure_ascii=False) + "\n"
+    sys.stdout.buffer.write(payload.encode("utf-8"))
+    sys.stdout.buffer.flush()
 
 
 async def file_call(config, name, arguments):
