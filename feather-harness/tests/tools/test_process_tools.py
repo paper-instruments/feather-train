@@ -56,6 +56,26 @@ async def test_missing_workdir_returns_shell_failure(process_tools):
     assert "Exit code: 1" in result.content
 
 
+@pytest.mark.parametrize("separator", ["; ", "\n"])
+async def test_missing_workdir_does_not_execute_any_part_of_script(
+    process_tools, tmp_path, separator
+):
+    result = await process_tools.bash_tool().invoke(
+        json.dumps({"command": f"printf first{separator}touch marker", "workdir": "missing"})
+    )
+    assert "Exit code: 1" in result.content
+    assert not (tmp_path / "marker").exists()
+
+
+async def test_workdir_accepts_compound_shell_commands(process_tools, tmp_path):
+    (tmp_path / "sub").mkdir()
+    result = await process_tools.bash_tool().invoke(
+        json.dumps({"command": "for value in one two; do printf '%s ' \"$value\"; done", "workdir": "sub"})
+    )
+    assert "Exit code: 0" in result.content
+    assert result.content.endswith("Output:\none two ")
+
+
 async def test_workdir_outside_workspace_is_rejected(process_tools):
     result = await process_tools.bash_tool().invoke(
         json.dumps({"command": "pwd", "workdir": "../"})
