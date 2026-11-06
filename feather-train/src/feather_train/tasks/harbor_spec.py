@@ -119,8 +119,8 @@ def parse_image_workdir(dockerfile: str, *, where: str) -> str:
         stage = _FROM_LINE.match(line)
         if stage is not None:
             if stage_name is not None:
-                stages[stage_name] = found
-            found = stages.get(stage.group(1))
+                stages[stage_name.lower()] = found
+            found = stages.get(stage.group(1).lower())
             stage_name = stage.group(2)
             continue
         match = _WORKDIR_LINE.match(line)

@@ -240,9 +240,10 @@ def test_parse_image_workdir_does_not_reuse_an_unrelated_build_stage(final_workd
         )
 
 
-def test_parse_image_workdir_inherits_a_named_build_stage():
+@pytest.mark.parametrize("stage_name", ["base", "Base"])
+def test_parse_image_workdir_inherits_a_named_build_stage(stage_name):
     assert parse_image_workdir(
-        "FROM debian AS base\nWORKDIR /app\nFROM base\nWORKDIR tests\n", where="img"
+        f"FROM debian AS {stage_name}\nWORKDIR /app\nFROM base\nWORKDIR tests\n", where="img"
     ) == "/app/tests"
 
 
