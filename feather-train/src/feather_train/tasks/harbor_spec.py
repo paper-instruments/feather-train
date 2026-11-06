@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import re
 import tomllib
 from dataclasses import dataclass, replace
@@ -15,6 +16,9 @@ NetworkMode = Literal["public", "no-network"]
 EnvironmentMode = Literal["shared", "separate"]
 
 _WORKDIR_LINE = re.compile(r"^\s*WORKDIR\s+(\S+)\s*$", re.IGNORECASE)
+_FROM_LINE = re.compile(
+    r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?\s*$", re.IGNORECASE
+)
 
 
 class CollectHook(BaseModel):
@@ -106,16 +110,32 @@ def parse_harbor_spec(
 
 
 def parse_image_workdir(dockerfile: str, *, where: str) -> str:
-    """Last Dockerfile WORKDIR, which is the official Harbor agent cwd."""
+    """Resolve the final stage's WORKDIR without guessing a base image's cwd."""
     found = None
+    stage_name = None
+    stages: dict[str, str | None] = {}
     for raw in dockerfile.splitlines():
         line = raw.split("#", 1)[0].rstrip()
+        stage = _FROM_LINE.match(line)
+        if stage is not None:
+            if stage_name is not None:
+                stages[stage_name] = found
+            found = stages.get(stage.group(1))
+            stage_name = stage.group(2)
+            continue
         match = _WORKDIR_LINE.match(line)
         if match is None:
             continue
-        found = match.group(1).strip().strip("\"'")
+        value = match.group(1).strip().strip("\"'")
+        if "$" in value or (not value.startswith("/") and found is None):
+            found = None
+            continue
+        found = posixpath.normpath(posixpath.join(found or "/", value))
     if found is None:
-        raise ValueError(f"{where}: Dockerfile has no WORKDIR")
+        raise ValueError(
+            f"{where}: Dockerfile final stage has no resolvable absolute WORKDIR; "
+            "set environment.workdir explicitly"
+        )
     return _absolute_workdir(found, where=where)
 
 

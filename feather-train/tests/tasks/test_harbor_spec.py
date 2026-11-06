@@ -223,3 +223,35 @@ def test_parse_image_workdir_uses_last_instruction():
         parse_image_workdir("FROM debian\nWORKDIR /tmp\nWORKDIR /root\n", where="img")
         == "/root"
     )
+
+
+def test_parse_image_workdir_resolves_relative_instructions():
+    assert parse_image_workdir(
+        "FROM debian\nWORKDIR /app\nWORKDIR src\nWORKDIR ../tests\n", where="img"
+    ) == "/app/tests"
+
+
+@pytest.mark.parametrize("final_workdir", ["", "WORKDIR app\n"])
+def test_parse_image_workdir_does_not_reuse_an_unrelated_build_stage(final_workdir):
+    with pytest.raises(ValueError, match="absolute WORKDIR"):
+        parse_image_workdir(
+            "FROM debian AS builder\nWORKDIR /build\nFROM alpine\n" + final_workdir,
+            where="img",
+        )
+
+
+def test_parse_image_workdir_inherits_a_named_build_stage():
+    assert parse_image_workdir(
+        "FROM debian AS base\nWORKDIR /app\nFROM base\nWORKDIR tests\n", where="img"
+    ) == "/app/tests"
+
+
+def test_parse_image_workdir_can_resolve_a_later_absolute_instruction():
+    assert parse_image_workdir(
+        "FROM debian\nWORKDIR unknown\nWORKDIR /app\n", where="img"
+    ) == "/app"
+
+
+def test_parse_image_workdir_requires_explicit_workdir_for_variable_expansion():
+    with pytest.raises(ValueError, match="set environment.workdir explicitly"):
+        parse_image_workdir("FROM debian\nWORKDIR /app\nWORKDIR $SUBDIR\n", where="img")
