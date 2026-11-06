@@ -9,6 +9,7 @@ import time
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 
 import uvicorn
 from mcp.server.lowlevel import Server
@@ -35,7 +36,10 @@ def mcp_server(
     fail_response_after_write: Path | None = None,
     tool_names: tuple[str, ...] | None = None,
     page_size: int | None = None,
+    pagination: Literal["finite", "repeat", "endless"] = "finite",
 ):
+    if page_size is not None and page_size <= 0:
+        raise ValueError("page_size must be positive")
     state = SimpleNamespace(
         list_calls=0, calls=[], headers=[], discovery_failures=discovery_failures
     )
@@ -61,8 +65,12 @@ def mcp_server(
             ]
             if page_size is None:
                 return tools
+            if pagination == "repeat":
+                return ListToolsResult(tools=[], nextCursor="repeated")
             start = int(request.params.cursor) if request.params and request.params.cursor else 0
             end = start + page_size
+            if pagination == "endless":
+                return ListToolsResult(tools=[], nextCursor=str(end))
             return ListToolsResult(
                 tools=tools[start:end],
                 nextCursor=str(end) if end < len(tools) else None,

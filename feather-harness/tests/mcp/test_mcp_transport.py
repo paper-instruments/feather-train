@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from feather_harness import McpServerSpec, run_with_mcp
 from feather_harness.core.runner import RunResult
+from feather_harness.tools import mcp as adapter
 from feather_harness.tools.mcp import MCPTransportError
 
 from .server import mcp_server
@@ -83,6 +84,45 @@ async def test_discovery_includes_and_dispatches_tools_from_every_page():
         await run_with_mcp((McpServerSpec(name="mail", transport="http", url=url + "/mcp/"),), run)
         assert server.list_calls == 3
         assert server.calls == [("fifth", {"value": "last page"})]
+
+
+async def test_discovery_rejects_repeated_pagination_cursors():
+    with mcp_server(tool_names=("first",), page_size=1, pagination="repeat") as (url, server):
+
+        async def run(tools):
+            pytest.fail("Agent must not start with incomplete discovery")
+
+        async with asyncio.timeout(2):
+            with pytest.raises(MCPTransportError, match="repeated pagination cursor"):
+                await run_with_mcp(
+                    (McpServerSpec(name="mail", transport="http", url=url + "/mcp/"),), run
+                )
+        assert server.list_calls == 2
+
+
+async def test_discovery_deadline_stops_an_endless_cursor_chain(monkeypatch):
+    monkeypatch.setattr(adapter, "_DEFAULT_DISCOVERY_TIMEOUT_SECONDS", 0.1)
+    with mcp_server(tool_names=("first",), page_size=1, pagination="endless") as (url, server):
+
+        async def run(tools):
+            pytest.fail("Agent must not start with incomplete discovery")
+
+        async with asyncio.timeout(2):
+            with pytest.raises(MCPTransportError, match="discovery timed out"):
+                await run_with_mcp(
+                    (McpServerSpec(
+                        name="mail", transport="http", url=url + "/mcp/", request_timeout_seconds=0,
+                    ),),
+                    run,
+                )
+        assert server.list_calls > 1
+
+
+@pytest.mark.parametrize("page_size", [0, -1])
+def test_paginated_server_requires_a_positive_page_size(page_size):
+    with pytest.raises(ValueError, match="page_size must be positive"):
+        with mcp_server(tool_names=("first",), page_size=page_size):
+            pytest.fail("An invalid fixture must not start a server")
 
 
 async def test_discovery_retries_after_transient_failure():

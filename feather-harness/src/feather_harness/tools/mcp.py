@@ -30,6 +30,7 @@ from . import Tool, ToolResult, ToolSpec
 from .files import FileToolTransport
 
 logger = logging.getLogger(__name__)
+_DEFAULT_DISCOVERY_TIMEOUT_SECONDS = 3 * 60.0 + 1 + 2
 _CALL_VALIDATION_ERROR = re.compile(
     r"^[1-9]\d* validation errors? for call\[[^\]\r\n]+\](?:\r?\n|$)"
 )
@@ -159,21 +160,39 @@ async def _connect_tools(stack, servers, reserved_names, enable_image_tools=Fals
                 )
             )
             await session.initialize()
+        # Bound the complete listing by the former single-page retry allowance:
+        # three requests plus their 1- and 2-second backoffs. Disabled per-request
+        # deadlines still use the default startup budget for discovery only.
+        discovery_timeout = (
+            3 * response_timeout + 1 + 2
+            if response_timeout is not None
+            else _DEFAULT_DISCOVERY_TIMEOUT_SECONDS
+        )
         cursor = None
-        while True:
-            for attempt in range(3):
-                try:
-                    listing = await session.list_tools(cursor=cursor)
-                    break
-                except Exception:
-                    if attempt == 2:
-                        raise
-                    logger.warning("MCP discovery failed for %s; retrying", server.name)
-                    await asyncio.sleep(attempt + 1)
-            discovered.extend((server, session, tool) for tool in listing.tools)
-            cursor = listing.nextCursor
-            if cursor is None:
-                break
+        seen_cursors: set[str] = set()
+        try:
+            async with asyncio.timeout(discovery_timeout):
+                while True:
+                    for attempt in range(3):
+                        try:
+                            listing = await session.list_tools(cursor=cursor)
+                            break
+                        except Exception:
+                            if attempt == 2:
+                                raise
+                            logger.warning("MCP discovery failed for %s; retrying", server.name)
+                            await asyncio.sleep(attempt + 1)
+                    discovered.extend((server, session, tool) for tool in listing.tools)
+                    cursor = listing.nextCursor
+                    if cursor is None:
+                        break
+                    if cursor in seen_cursors:
+                        raise MCPTransportError(
+                            f"MCP discovery for {server.name} repeated pagination cursor"
+                        )
+                    seen_cursors.add(cursor)
+        except TimeoutError as exc:
+            raise MCPTransportError(f"MCP discovery timed out for {server.name}") from exc
     names = _tool_names(discovered, reserved_names)
     return tuple(
         _bind(server, session, tool, name, enable_image_tools=enable_image_tools, file_transport=file_transport)
