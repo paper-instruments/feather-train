@@ -84,25 +84,25 @@ General rules:
 - Never shrink type, or turn on automatic shrink-to-fit, to rescue a structurally overcrowded page. Edit, split, or change the representation.
 - Use nonbreaking spaces or keep-with-next behavior where the format supports it to prevent separated currency/unit pairs, orphaned headings, and hanging final words.
 
-**Fixed house styles for net-new artifacts.** These are exact point sizes, and related artifacts use the same styles. Where a subheading shares the body size, bold and spacing distinguish it. The PowerPoint scale is sized for dense consulting slides, so content that does not fit is cut, split, or restructured while the sizes stay as they are. Nothing is set below 10 pt.
+**Fixed house styles for net-new artifacts.** These are exact point sizes, and related artifacts use the same styles. Where a subheading shares the body size, bold and spacing distinguish it. PowerPoint has two scales. The read scale suits decks read on screen or in print, such as board pre-reads and investment decks, and is sized for dense analytical slides. The presented scale suits decks shown to a room, such as lectures, lessons, conference talks, and training. Content that does not fit is cut, split, or restructured while the sizes stay as they are. Nothing is set below 10 pt, or below 14 pt on a presented slide.
 
-| Semantic role | PowerPoint, 16:9 | Word report/memo | Excel workbook |
-|---|---:|---:|---:|
-| Primary title | 32 pt bold | 14 pt bold | 18 pt bold |
-| Slide action title | 24 pt bold | Not used | Not used |
-| Key figure in a callout | 28 pt bold | Not used | Not used |
-| Section heading | 16 pt bold | 12 pt bold | 14 pt bold |
-| Subheading | 14 pt bold | 12 pt bold italic | 11 pt bold |
-| Body text | 12 pt regular | 12 pt regular | 11 pt regular |
-| Table cells and short labels on charts and diagrams | 12 pt regular | 12 pt regular | 11 pt regular |
-| Source citations, footnotes, and page numbers | 10 pt regular | 10 pt regular | 10 pt regular |
+| Semantic role | PowerPoint read, 16:9 | PowerPoint presented, 16:9 | Word report/memo | Excel workbook |
+|---|---:|---:|---:|---:|
+| Primary title | 32 pt bold | 40 pt bold | 14 pt bold | 18 pt bold |
+| Slide title | 24 pt bold | 32 pt bold | Not used | Not used |
+| Key figure in a callout | 28 pt bold | 36 pt bold | Not used | Not used |
+| Section heading | 16 pt bold | 24 pt bold | 12 pt bold | 14 pt bold |
+| Subheading | 14 pt bold | 20 pt bold | 12 pt bold italic | 11 pt bold |
+| Body text | 12 pt regular | 20 pt regular | 12 pt regular | 11 pt regular |
+| Table cells and short labels on charts and diagrams | 12 pt regular | 18 pt regular | 12 pt regular | 11 pt regular |
+| Source citations, footnotes, and page numbers | 10 pt regular | 14 pt regular | 10 pt regular | 10 pt regular |
 
 Role mapping:
 
-- **PowerPoint:** the action title states each analytical slide's message, and the primary title is reserved for the cover and section dividers. Section headings divide content within a slide, and subheadings label a chart or smaller content block. Body text, table cells, and short labels on charts and diagrams all use 12 pt, and prose keeps that size wherever it sits, including in text columns, boxes, and process steps. Table headers use it in bold. No other display sizes exist, including on the cover.
+- **PowerPoint:** in a read deck, the slide title is an action title that states each analytical slide's message. On a presented slide, it states the slide's one point or names the question or concept the audience takes up. The primary title is reserved for the cover and section dividers. Section headings divide content within a slide, and subheadings label a chart or smaller content block. Body text, table cells, and short labels on charts and diagrams use their sizes on the deck's scale, and prose keeps that size wherever it sits, including in text columns, boxes, and process steps. Table headers use it in bold. No other display sizes exist, including on the cover.
 - **Word:** use named Title, Heading 1, Heading 2, Normal, Caption, and Footnote Text styles. A third heading level is rarely needed, and the document stays at two. Table headers are 12 pt bold.
 - **Excel:** the workbook or worksheet title is 18 pt, section bands are 14 pt, and column headers, subtotals, and lower-level labels are 11 pt bold. Ordinary values and formulas remain 11 pt. Format hierarchy must not inflate every row or replace functional number formats.
-- **PDF:** retain the source artifact's exact styles on export. A directly authored report PDF uses the Word scale, and a slide PDF uses the PowerPoint scale. Export must not shrink the page to make content fit.
+- **PDF:** retain the source artifact's exact styles on export. A directly authored report PDF uses the Word scale, and a slide PDF uses the scale of its deck. Export must not shrink the page to make content fit.
 
 Apply these styles through slide masters/placeholders, Word styles, and workbook cell styles. Where a library requires explicit font properties, reuse the same named role definitions rather than selecting a size for each text box. Every font size in the artifact is one of these roles.
 
@@ -110,7 +110,7 @@ Do not relabel substantive content as a footnote to make it smaller. Material as
 
 The only overrides are a supplied client template, explicit user/brand direction, or a stated accessibility/viewing requirement. Define any override at the named-style level for the relevant artifact, not as arbitrary per-object adjustments. Do not scale these point sizes automatically with canvas dimensions or screen pixels. Common requirement-driven overrides:
 
-- If a deck must be readable from across a room, define a larger style set with body text of at least 18 pt and sources of at least 14 pt, and reflow.
+- If a deck must be readable from across a room, use the presented scale and reflow.
 - If a document must keep all text at 12 pt or larger, set its source style to 12 pt as well.
 - For wide workbooks, preserve zoom, native editability, and usable print layouts, and never use print scaling to turn a wide model into microscopic text.
 
