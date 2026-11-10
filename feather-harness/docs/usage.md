@@ -204,6 +204,12 @@ segments with their starting contexts and new messages, so you can inspect how t
 agent reached its result even across compactions. `execution_messages()` provides
 a chronological transcript without duplicated context or summary calls.
 
+To summarize a saved trace without running the agent, pass `--inspect TRACE`. The
+CLI prints JSON with the stop reason, turn and compaction counts, provider usage,
+tool-call counts from the execution transcript, and the final answer. It accepts
+`feather.run.v1` documents and the wrapped training-evidence schema used by
+`feather-atif`. Inspection does not install skills or call the model.
+
 The CLI currently runs one task at a time; interactive chat, resume, and image attachments
 on the initial command are not supported. Enabled image tools can inspect files and
 MCP image results during the run. See the [tool reference](tools.md).

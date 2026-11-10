@@ -187,7 +187,8 @@ export OPENAI_API_KEY=YOUR_API_KEY
 Use the model identifier and endpoint supplied by your provider. Omit `--base-url`
 for the OpenAI client's default endpoint. The default `prod` profile expects an
 image-capable model; pass `--profile train` for the minimal prompt. The CLI writes
-a `RunResult` JSON trace to stdout.
+a `RunResult` JSON trace to stdout. `feather --inspect run.json` prints a JSON
+summary of a saved trace without calling the model.
 
 See the [usage reference](docs/usage.md) for installer options, task Python, JSON
 config, compaction, MCP, and subagents.
