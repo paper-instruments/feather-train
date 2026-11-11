@@ -112,3 +112,27 @@ def test_install_task_skills_fails_on_bundled_name_collision(tmp_path):
     (extra / "SKILL.md").write_text("collision")
     with pytest.raises(FileExistsError, match="conflicts with installed content"):
         install_task_skills(tmp_path, extra.parent)
+
+
+@pytest.mark.parametrize("redirect_root", [False, True], ids=["dangling-file", "skill-directory"])
+def test_task_skills_reject_destination_symlinks_before_copying(tmp_path, redirect_root):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a-first.md").write_text("first skill")
+    (source / "z-last.md").write_text("last skill")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    destination = workspace / ".agents"
+    if redirect_root:
+        destination.symlink_to(outside, target_is_directory=True)
+    else:
+        destination.mkdir()
+        (destination / "z-last.md").symlink_to(outside / "created.md")
+
+    with pytest.raises(FileExistsError):
+        install_task_skills(workspace, source)
+
+    assert list(outside.iterdir()) == []
+    assert not (destination / "a-first.md").exists()
