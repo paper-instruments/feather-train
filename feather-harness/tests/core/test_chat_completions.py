@@ -226,6 +226,49 @@ def _delta(finish_reason=None, **delta):
     return {"choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}]}
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("payload, error", [
+    ({"thinking_blocks": [{"type": "thinking", "thinking": "plan", "signature": "signed"}]},
+     "Signed thinking-block replay"),
+    ({"audio": {"id": "audio", "data": "AAAA", "expires_at": 1, "transcript": "answer"}},
+     "Audio is not currently supported"),
+])
+async def test_unsupported_response_payloads_fail_in_both_transport_modes(stream, payload, error):
+    response = None
+
+    class ResponseStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield _sse(_delta(content="answer", **payload), _delta(finish_reason="stop")).content
+
+        async def aclose(self):
+            pass
+
+    def respond(request):
+        nonlocal response
+        if stream:
+            response = httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=ResponseStream(),
+            )
+        else:
+            response = httpx.Response(200, json={
+                "id": "r", "object": "chat.completion", "created": 0, "model": "model",
+                "choices": [{
+                    "index": 0, "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "answer", **payload},
+                }],
+            })
+        return response
+
+    async with AsyncOpenAI(
+        api_key="test", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        model = ChatCompletionsModel(client=client, model="model", stream=stream)
+        with pytest.raises(ValueError, match=error):
+            await model.complete([UserMessage(content="task")], settings=ModelSettings())
+        assert response.is_closed
+
+
 async def test_streamed_response_is_assembled_like_a_nonstreamed_one():
     requests = []
 
