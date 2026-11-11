@@ -223,7 +223,8 @@ def command_in_workdir(
             "Working directory must be inside the workspace or an explicitly granted path.",
             "invalid_path",
         )
-    return f"cd {shlex.quote(str(path))} && {command}"
+    # An && prefix would guard only the first command in a multi-command script.
+    return f"cd {shlex.quote(str(path))} || exit\n{command}"
 
 
 async def monitor(
