@@ -55,7 +55,8 @@ export OPENAI_API_KEY=YOUR_API_KEY
 ```
 
 Put your input files in `workspace/`. `run.json` contains the final answer and the
-agent's execution trace. The model identifier and endpoint come from your provider;
+agent's execution trace. The CLI also saves that document at `workspace/.feather/run.json`
+and accepts `--output PATH` in addition to stdout. The model identifier and endpoint come from your provider;
 omit `--base-url` for the OpenAI client's default endpoint. Shell tools run with
 your OS permissions. Running Feather creates skill and log directories inside the
 selected workspace.
