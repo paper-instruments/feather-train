@@ -27,6 +27,7 @@ def mcp_server(
     text_blocks=None,
     fail_response_after_write: Path | None = None,
     tool_names: tuple[str, ...] | None = None,
+    structured_content: dict[str, object] | None = None,
 ):
     state = SimpleNamespace(
         list_calls=0, calls=[], headers=[], discovery_failures=discovery_failures
@@ -83,7 +84,10 @@ def mcp_server(
         if name == "image":
             return [ImageContent(type="image", data="AA==", mimeType="image/png")]
         blocks = text_blocks if text_blocks is not None else ["Echo:", arguments["value"]]
-        return [TextContent(type="text", text=text) for text in blocks]
+        content = [TextContent(type="text", text=text) for text in blocks]
+        if structured_content is not None:
+            return CallToolResult(content=content, structuredContent=structured_content)
+        return content
 
     manager = StreamableHTTPSessionManager(server, json_response=True)
     sse = SseServerTransport("/messages/")
