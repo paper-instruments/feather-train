@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 
+import pytest
 from feather_harness import (
     AssistantMessage,
     RunResult,
@@ -18,6 +19,44 @@ from harbor.utils.traces_utils import collect_conversations_from_trial, collect_
 from feather_eval.atif import to_atif, write_atif
 
 AGENT = Agent(name="feather", version="test", model_name="test-model")
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity", "1e309", "-1e309"])
+def test_nonfinite_tool_arguments_are_preserved_without_rewriting_them(constant):
+    arguments = f'{{"value": {constant}}}'
+    result = RunResult(
+        stop_reason="completed", num_turns=1, compactions=0,
+        segments=(TraceSegment(
+            kind="execution", input=(UserMessage(content="task"),),
+            messages=(AssistantMessage(tool_calls=(
+                ToolCall(id="call", name="work", arguments=arguments),
+            )),),
+        ),),
+    )
+
+    trajectory = to_atif(result, agent=AGENT, session_id="run")["trajectory.json"]
+    saved = Trajectory.model_validate_json(trajectory.model_dump_json())
+    call = saved.steps[-1].tool_calls[0]
+    assert call.arguments == {}
+    assert call.extra == {"raw_arguments": arguments}
+
+
+def test_finite_scientific_notation_remains_a_numeric_argument():
+    result = RunResult(
+        stop_reason="completed", num_turns=1, compactions=0,
+        segments=(TraceSegment(
+            kind="execution", input=(UserMessage(content="task"),),
+            messages=(AssistantMessage(tool_calls=(
+                ToolCall(id="call", name="work", arguments='{"values": [1e308, -2.5e-3]}'),
+            )),),
+        ),),
+    )
+
+    trajectory = to_atif(result, agent=AGENT, session_id="run")["trajectory.json"]
+    saved = Trajectory.model_validate_json(trajectory.model_dump_json())
+    call = saved.steps[-1].tool_calls[0]
+    assert call.arguments == {"values": [1e308, -0.0025]}
+    assert call.extra is None
 
 
 def test_tool_results_stay_with_their_calls_and_partial_calls_stay_unfinished():

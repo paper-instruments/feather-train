@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from importlib.metadata import version
 from pathlib import Path
 
@@ -129,8 +130,12 @@ def _steps(messages: tuple[Message, ...], *, copied_inputs: int = 0) -> list[Ste
             calls = []
             for call in message.tool_calls:
                 try:
-                    arguments = json.loads(call.arguments)
-                except json.JSONDecodeError:
+                    arguments = json.loads(
+                        call.arguments,
+                        parse_constant=_parse_finite_float,
+                        parse_float=_parse_finite_float,
+                    )
+                except ValueError:
                     arguments = None
                 # ATIF requires an object; preserve malformed/non-object requests losslessly.
                 extra = None
@@ -165,6 +170,13 @@ def _steps(messages: tuple[Message, ...], *, copied_inputs: int = 0) -> list[Ste
             )
         steps.append(step)
     return steps
+
+
+def _parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"Non-finite JSON number: {value}")
+    return parsed
 
 
 def _attach_usage(steps: list[Step], calls: tuple[ProviderUsage, ...]) -> None:
