@@ -13,8 +13,10 @@ from process_worker import managed_groups, signal_groups, start_task, terminate
 from save_transcript import save_transcript
 
 
-def emit(value):
-    print(json.dumps(value, ensure_ascii=False), flush=True)
+def emit(value: dict) -> None:
+    payload = json.dumps(value, ensure_ascii=False) + "\n"
+    sys.stdout.buffer.write(payload.encode("utf-8"))
+    sys.stdout.buffer.flush()
 
 
 async def file_call(config, name, arguments):
