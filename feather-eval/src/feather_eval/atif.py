@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from importlib.metadata import version
 from pathlib import Path
 
@@ -18,6 +19,10 @@ from harbor.models.trajectories.step import Step
 from harbor.models.trajectories.subagent_trajectory_ref import SubagentTrajectoryRef
 from harbor.models.trajectories.tool_call import ToolCall
 from harbor.models.trajectories.trajectory import Trajectory
+
+_TRAJECTORY_FILENAME = re.compile(
+    r"trajectory(?:\.cont-\d+|\.summarization-\d+)?\.json"
+)
 
 
 def to_atif(
@@ -104,6 +109,9 @@ def write_atif(
     """Write validated ATIF documents with relative continuation and summary references."""
     trajectories = to_atif(result, agent=agent, session_id=session_id, grader=grader)
     directory.mkdir(parents=True, exist_ok=True)
+    for path in directory.iterdir():
+        if _TRAJECTORY_FILENAME.fullmatch(path.name) and path.name not in trajectories:
+            path.unlink()
     for name, trajectory in trajectories.items():
         (directory / name).write_text(trajectory.model_dump_json(exclude_none=True, indent=2))
 

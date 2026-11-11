@@ -141,6 +141,60 @@ def test_compaction_files_preserve_context_without_duplicate_training_targets(tm
     assert summaries["summarization-1"][0]["conversations"][-1]["content"] == "summary"
 
 
+def test_reexport_removes_only_stale_trajectory_files(tmp_path):
+    first = RunResult(
+        stop_reason="completed",
+        num_turns=2,
+        compactions=1,
+        segments=(
+            TraceSegment(
+                kind="execution",
+                input=(UserMessage(content="First task"),),
+                messages=(AssistantMessage(content="First answer"),),
+            ),
+            TraceSegment(
+                kind="compaction",
+                input=(UserMessage(content="Summarize"),),
+                messages=(AssistantMessage(content="summary"),),
+            ),
+            TraceSegment(
+                kind="execution",
+                input=(UserMessage(content="Second task"),),
+                messages=(AssistantMessage(content="Second answer"),),
+            ),
+        ),
+    )
+    second = RunResult(
+        stop_reason="completed",
+        num_turns=1,
+        compactions=0,
+        segments=(
+            TraceSegment(
+                kind="execution",
+                input=(UserMessage(content="Replacement task"),),
+                messages=(AssistantMessage(content="Replacement answer"),),
+            ),
+        ),
+    )
+    output = tmp_path / "agent"
+    write_atif(first, output, agent=AGENT, session_id="first")
+    assert {"trajectory.cont-1.json", "trajectory.summarization-1.json"} <= {
+        path.name for path in output.iterdir()
+    }
+    unrelated = output / "trajectory.custom.json"
+    unrelated.write_text("keep")
+
+    write_atif(second, output, agent=AGENT, session_id="second")
+
+    assert sorted(path.name for path in output.iterdir()) == [
+        "trajectory.custom.json",
+        "trajectory.json",
+    ]
+    assert unrelated.read_text() == "keep"
+    saved = Trajectory.model_validate_json((output / "trajectory.json").read_text())
+    assert saved.session_id == "second"
+
+
 def test_supplied_assistant_history_is_context_not_a_training_target(tmp_path):
     result = RunResult(
         stop_reason="completed",
