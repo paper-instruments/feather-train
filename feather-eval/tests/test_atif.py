@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 
+import pytest
 from feather_harness import (
     AssistantMessage,
     RunResult,
@@ -18,6 +19,33 @@ from harbor.utils.traces_utils import collect_conversations_from_trial, collect_
 from feather_eval.atif import to_atif, write_atif
 
 AGENT = Agent(name="feather", version="test", model_name="test-model")
+
+
+@pytest.mark.parametrize("grader", [False, True])
+def test_signed_and_encrypted_reasoning_survives_export_for_history_and_new_steps(grader):
+    signed = {"type": "reasoning.text", "text": "Plan", "signature": "signature", "index": 0}
+    encrypted = {"type": "reasoning.encrypted", "data": "opaque", "id": "rs_1", "index": 1}
+    result = RunResult(
+        stop_reason="failed", num_turns=1, compactions=0,
+        segments=(TraceSegment(
+            kind="execution",
+            input=(
+                UserMessage(content="Previous question"),
+                AssistantMessage(content="Previous answer", reasoning_details=(signed,)),
+                UserMessage(content="Current question"),
+            ),
+            messages=(AssistantMessage(
+                reasoning_content="Summary", reasoning_details=(encrypted,), refusal="Cannot comply",
+            ),),
+        ),),
+    )
+
+    trajectory = to_atif(result, agent=AGENT, session_id="run", grader=grader)["trajectory.json"]
+    saved = Trajectory.model_validate_json(trajectory.model_dump_json())
+    history, produced = [step for step in saved.steps if step.source == "agent"]
+    assert history.extra == {"reasoning_details": [signed]}
+    assert produced.extra == {"reasoning_details": [encrypted], "refusal": "Cannot comply"}
+    assert produced.reasoning_content == "Summary"
 
 
 def test_tool_results_stay_with_their_calls_and_partial_calls_stay_unfinished():
