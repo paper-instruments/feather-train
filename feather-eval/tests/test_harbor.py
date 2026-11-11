@@ -224,6 +224,64 @@ async def test_nonzero_cli_exit_fails_the_harbor_run(tmp_path):
     }
 
 
+async def test_unicode_task_text_survives_a_windows_default_encoding(tmp_path, monkeypatch):
+    environment = LocalEnvironment(tmp_path)
+    executable = environment.install_dir / "venv" / "bin" / "feather"
+    executable.parent.mkdir(parents=True)
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        + """
+import json, sys
+from feather_harness import AssistantMessage, RunResult, TraceSegment, UserMessage
+
+config = json.loads(open(sys.argv[2], encoding='utf-8').read())
+answer = sys.stdin.read() + config['additional_instructions']
+print(RunResult(
+    stop_reason='completed', num_turns=1, compactions=0, final_answer=answer,
+    segments=(TraceSegment(
+        kind='execution', input=(UserMessage(content='task'),),
+        messages=(AssistantMessage(content=answer),),
+    ),),
+).model_dump_json())
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    original_read_text = Path.read_text
+    original_write_text = Path.write_text
+
+    def windows_read_text(self, encoding=None, errors=None):
+        return original_read_text(self, encoding or "cp1252", errors)
+
+    def windows_write_text(self, data, encoding=None, errors=None, newline=None):
+        return original_write_text(self, data, encoding or "cp1252", errors, newline)
+
+    monkeypatch.setattr(Path, "read_text", windows_read_text)
+    monkeypatch.setattr(Path, "write_text", windows_write_text)
+    logs = tmp_path / "agent logs"
+    logs.mkdir()
+    wheel = tmp_path / "feather_harness-0.1.0-py3-none-any.whl"
+    wheel.write_bytes(b"selected wheel")
+    agent = FeatherHarborAgent(
+        logs_dir=logs,
+        environment_logs_dir=logs,
+        model_name="test",
+        wheel=str(wheel),
+        extra_env={"OPENAI_API_KEY": "test"},
+        additional_instructions=" Résumé – 工作",
+    )
+    await agent.install(environment)
+
+    context = AgentContext()
+    await agent.run("Rédigez le rapport — 报告", environment, context)
+    Trial._populate_agent_context(SimpleNamespace(user_agent=None, agent=agent), context)
+
+    answer = "Rédigez le rapport — 报告 Résumé – 工作"
+    assert context.metadata["final_answer"] == answer
+    trajectory = json.loads((logs / "trajectory.json").read_bytes().decode("utf-8"))
+    assert trajectory["steps"][-1]["message"] == answer
+
+
 async def test_web_tools_without_exa_key_fail_before_feather_starts(tmp_path):
     environment = LocalEnvironment(tmp_path)
     logs = tmp_path / "agent logs"
