@@ -26,7 +26,7 @@ office = [
     "Pillow>=10.3,<13",
     # Not used by the skills; models write task scripts that expect them.
     "pandas>=2.2,<3",
-    "requests>=2.32,<3",
+    "requests>=2.32.4,<3",
     "beautifulsoup4>=4.12,<5",
     "lxml>=5.3,<7",
 ]

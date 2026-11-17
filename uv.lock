@@ -949,7 +949,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1" },
     { name = "reportlab", marker = "extra == 'office'", specifier = ">=4,<5" },
-    { name = "requests", marker = "extra == 'office'", specifier = ">=2.32,<3" },
+    { name = "requests", marker = "extra == 'office'", specifier = ">=2.32.4,<3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "tenacity", specifier = ">=9.1,<10" },
     { name = "transformers", marker = "extra == 'token-count'", specifier = "==5.17.0" },
