@@ -85,7 +85,24 @@ feather-eval = { git = "https://github.com/paper-instruments/feather-train.git",
 
 Replace `<full-commit-sha>` with the commit you want to consume and run `uv lock`.
 Include the `feather-harness` source when using Train or Eval so their shared
-harness dependency resolves to this repository. Omit packages you do not use.
+harness dependency resolves to this repository. Built Train/Eval wheels also carry a
+full-commit Git source reference for the harness in standard dependency metadata;
+generic pip installs therefore require Git and do not fall back to a public
+`feather-harness` package. The source commit is deliberately pinned and must be
+updated when adopting a newer harness. Keep the source commit reachable on the
+remote; before deleting, squashing or rewriting its only containing branch,
+update the pin to the reviewed merged or released commit and rebuild consumers.
+Uv workspace development continues to use
+the local member. These Git-reference wheels are for source consumers, not a
+claim that the internal names are published or reserved on PyPI.
+
+Install built Train/Eval wheels together without also supplying a harness wheel.
+A local wheel and the pinned Git source are different dependency URLs, even when
+their package versions match. For example, use `uv pip install dist/feather_train-*.whl dist/feather_eval-*.whl` in a fresh environment and let
+that command resolve the pinned harness. Test or install a standalone harness
+wheel in its own environment. Dependency resolution remains enabled in both.
+
+Omit packages you do not use.
 Choose Train's `verifiers`, `tinker`, or `training` extra for the integration you
 need. Commit the consumer's lockfile to preserve the resolved revisions.
 

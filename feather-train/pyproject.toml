@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
-dependencies = ["feather-harness==0.1.0", "e2b==2.42.0", "tenacity>=9.1,<10"]
+dependencies = ["feather-harness @ git+https://github.com/paper-instruments/feather-train.git@197ab4cbc772d63589dfe402bf17450dbc21bb8f#subdirectory=feather-harness", "e2b==2.42.0", "tenacity>=9.1,<10"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.4"]
@@ -19,6 +19,9 @@ verifiers = ["verifiers==0.2.1", "renderers==0.1.8", "braintrust>=0.0.160", "hug
 tinker = ["feather-train[verifiers]", "tinker==0.30.1", "httpx>=0.27,<1"]
 
 training = ["feather-train[tinker]", "tinker-cookbook[wandb]==0.5.7"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/feather_train"]

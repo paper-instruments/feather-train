@@ -10,13 +10,16 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
-dependencies = ["feather-harness==0.1.0", "harbor==0.22.0"]
+dependencies = ["feather-harness @ git+https://github.com/paper-instruments/feather-train.git@197ab4cbc772d63589dfe402bf17450dbc21bb8f#subdirectory=feather-harness", "harbor==0.22.0"]
 
 [project.scripts]
 feather-atif = "feather_eval.atif:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.4"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/feather_eval"]
