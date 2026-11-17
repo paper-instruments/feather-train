@@ -24,6 +24,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from verifiers.v1 import SandboxError
 
 from feather_train.errors import NON_RETRYABLE_CAUSES, NonRetryableHarnessError
+from feather_train.grading.dependencies import GRADER_PIP_DEPS as GRADER_PIP_DEPS
+from feather_train.grading.dependencies import (
+    GRADER_SETUP_CONFIG_ERROR,
+    grader_dependency_check_script,
+)
 from feather_train.grading.report import report_to_criteria
 from feather_train.grading.types import (
     AgentEvidence,
@@ -62,19 +67,8 @@ HARBOR_REWARD_DETAIL_PATH = f"{VERIFIER_LOGS_DIR}/reward_detail.json"
 HARBOR_SUBMISSION_TRANSPORT_PATH = f"{TESTS_DIR}/submission_transport.txt"
 HARBOR_AGENT_TRACE_PATH = f"{TASK_DIR}/agent_trace.json"
 
-# Grader-only deps that are not already owned by the world snapshot.
-GRADER_PIP_DEPS = (
-    "braintrust==0.31.0",
-    "rubric==2.2.0",
-    "openai==2.45.0",
-    "httpx==0.28.1",
-    "pydantic==2.13.4",
-    "tenacity==9.1.4",
-)
 TRUSTED_GRADER_ENV = "PATH=/usr/local/bin:/usr/bin:/bin PYTHONSAFEPATH=1 PYTHONNOUSERSITE=1"
 NON_RETRYABLE_GRADER_EXIT_CODE = 2
-# Setup checks use EX_CONFIG only after confirming an immutable bake problem.
-GRADER_SETUP_CONFIG_ERROR = 78
 
 
 class GradingConfig(BaseModel):
@@ -485,15 +479,7 @@ async def _assert_harbor_grader_dependencies(
     """Fail closed when the verifier image lacks the pinned grader packages."""
     with _timed_step(steps, "assert_grader_dependencies") as step:
         cmd = f"/usr/bin/env {TRUSTED_GRADER_ENV} /usr/local/bin/python -c " + shlex.quote(
-            "import importlib.metadata as m, sys\n"
-            f"expected={dict(dep.split('==', 1) for dep in GRADER_PIP_DEPS)!r}\n"
-            "missing=[]\n"
-            "for name, version in expected.items():\n"
-            "    try:\n"
-            "        if m.version(name) != version: missing.append(name)\n"
-            "    except m.PackageNotFoundError: missing.append(name)\n"
-            "if missing: print(f'missing_or_mismatch={missing}', file=sys.stderr)\n"
-            f"raise SystemExit({GRADER_SETUP_CONFIG_ERROR} if missing else 0)\n"
+            grader_dependency_check_script()
         )
         result = await exec_bash(session, cmd, timeout=timeout)
         step.metadata["exit_code"] = result.exit_code
