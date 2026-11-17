@@ -263,6 +263,17 @@ def test_cli_rejects_invalid_config_before_workspace_setup(tmp_path):
     assert not (tmp_path / ".agents").exists()
 
 
+@pytest.mark.parametrize("max_tokens", [0, -1])
+def test_cli_rejects_nonpositive_max_tokens_before_workspace_setup(tmp_path, max_tokens):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"model": "test", "model_settings": {"max_tokens": max_tokens}}))
+    completed = cli(tmp_path, "--config", str(config), "Do the task")
+    assert completed.returncode == 1
+    assert "max_tokens" in completed.stderr
+    assert "greater than 0" in completed.stderr
+    assert not (tmp_path / ".agents").exists()
+
+
 def test_cli_web_tools_require_exa_key_before_workspace_setup(tmp_path, monkeypatch):
     monkeypatch.delenv("EXA_API_KEY", raising=False)
     config = tmp_path / "config.json"

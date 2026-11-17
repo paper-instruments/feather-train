@@ -42,7 +42,7 @@ class ModelSettings(FrozenModel):
     top_p: float | None = None
     frequency_penalty: float | None = None
     presence_penalty: float | None = None
-    max_tokens: int | None = None
+    max_tokens: int | None = Field(default=None, gt=0)
     parallel_tool_calls: bool | None = None
     reasoning_effort: str | None = None
     top_logprobs: int | None = None
@@ -271,8 +271,6 @@ class ChatCompletionsModel:
                 )
             requested = settings.max_tokens if settings.max_tokens is not None else remaining
             request["max_tokens"] = min(requested, remaining)
-            if request["max_tokens"] <= 0:
-                raise PromptTokenBudgetError("max_tokens must be positive")
         response = await self._request(request)
         if not response.choices:
             provider_error = getattr(response, "error", None)

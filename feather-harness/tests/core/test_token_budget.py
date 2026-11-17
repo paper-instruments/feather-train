@@ -75,8 +75,6 @@ async def test_output_budget_clamps_final_outbound_request(
 @pytest.mark.parametrize("prompt_tokens,requested,extra", [
     (131072, 131072, {}),
     (131073, 131072, {}),
-    (100, 0, {}),
-    (100, -1, {}),
     (100, 131072, {"max_tokens": 131072}),
     (100, 131072, {"max_completion_tokens": 131072}),
 ])
