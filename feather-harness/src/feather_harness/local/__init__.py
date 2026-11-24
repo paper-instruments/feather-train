@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import replace
@@ -268,7 +269,10 @@ def _exclude_harness_paths(workspace: Path) -> None:
     prefix, exclude = probe.stdout.splitlines()
     exclude_path = workspace / exclude
     existing = exclude_path.read_text() if exclude_path.exists() else ""
-    entries = [f"/{prefix}{path}" for path in _HARNESS_PATHS]
+    # Exclude entries are glob patterns; escape the prefix so a directory such as
+    # `task[1]` matches only itself.
+    literal_prefix = re.sub(r"([\\*?\[])", r"\\\1", prefix)
+    entries = [f"/{literal_prefix}{path}" for path in _HARNESS_PATHS]
     missing = [entry for entry in entries if entry not in existing.splitlines()]
     if not missing:
         return
