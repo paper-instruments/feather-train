@@ -394,8 +394,14 @@ def truncate_output_parts(
 
 
 def load_text(
-    path: Path, display: str, metadata: os.stat_result, *, scope: str = "reads text files"
+    path: Path,
+    display: str,
+    metadata: os.stat_result,
+    *,
+    scope: str = "reads text files",
+    lossless: bool = False,
 ) -> tuple[str, str, str]:
+    """Decode text and hash its bytes; ``lossless`` rejects text that needs replacement."""
     if metadata.st_size > MAX_FILE_SIZE_BYTES:
         raise FileToolError(
             f"File validation failed for {display}: File is too large ({metadata.st_size / 1024 / 1024:.1f}MB). Maximum allowed size is 10MB."
@@ -416,6 +422,12 @@ def load_text(
         try:
             text = data.decode(encoding)
         except (LookupError, UnicodeDecodeError):
+            # Writing replaced text back would turn every undecodable byte into U+FFFD.
+            if lossless:
+                raise FileToolError(
+                    f"File validation failed for {display}: This tool {scope} only; the file "
+                    "contains bytes that cannot be decoded as text, so no changes were made."
+                ) from None
             encoding = "utf-8"
             text = data.decode(encoding, errors="replace")
     # Hash original bytes: even an encoding or newline-only change makes a read stale.
