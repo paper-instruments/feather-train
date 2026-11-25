@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError, RevisionNotFoundError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from verifiers.v1 import SandboxError
 
 from feather_train.errors import NON_RETRYABLE_CAUSES, NonRetryableHarnessError
@@ -92,10 +92,10 @@ class GradingConfig(BaseModel):
     # in minutes; an hour-long attempt is a hang, and a timed-out exec yields
     # no stdout/stderr to diagnose. Fail the attempt fast and let the retry
     # loop (and rollout retry above it) own recovery.
-    poll_timeout: float = Field(300.0)
+    poll_timeout: float = Field(300.0, gt=0, allow_inf_nan=False)
     judge_max_attempts: int = Field(3, ge=1)
-    judge_retry_backoff_seconds: float = Field(2.0, ge=0.0)
-    judge_retry_max_backoff_seconds: float = Field(30.0, ge=0.0)
+    judge_retry_backoff_seconds: float = Field(2.0, ge=0.0, allow_inf_nan=False)
+    judge_retry_max_backoff_seconds: float = Field(30.0, ge=0.0, allow_inf_nan=False)
     # Trajectory conversion and staging scale with rollout length; graders opt in explicitly.
     stage_agent_trace: bool = False
     # Evaluation runs set this explicitly so the immutable run receipt names
@@ -104,6 +104,14 @@ class GradingConfig(BaseModel):
     judge_model: str | None = Field(default=None, min_length=1, max_length=500)
     judge_api_key_var: str | None = Field(default=None, min_length=1, max_length=100)
     judge_base_url: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def ordered_retry_backoff(self) -> GradingConfig:
+        if self.judge_retry_max_backoff_seconds < self.judge_retry_backoff_seconds:
+            raise ValueError(
+                "judge_retry_max_backoff_seconds must be >= judge_retry_backoff_seconds"
+            )
+        return self
 
 
 @dataclass(frozen=True, slots=True)

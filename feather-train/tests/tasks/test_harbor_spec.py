@@ -183,6 +183,19 @@ def test_separate_parses_collect_and_artifacts(tmp_path):
     assert spec.verifier_timeout_sec == 1800
 
 
+@pytest.mark.parametrize("timeout", ["0", "-5", "nan", "inf"])
+def test_verifier_timeout_must_be_finite_and_positive(tmp_path, timeout):
+    path = _write_world(
+        tmp_path,
+        "artifacts = [\"/logs/artifacts/model.patch\"]\n\n"
+        '[environment]\nnetwork_mode = "no-network"\nworkdir = "/app"\n\n'
+        '[verifier]\nenvironment_mode = "separate"\n'
+        f"timeout_sec = {timeout}\n",
+    )
+    with pytest.raises(ValueError, match="timeout_sec must be a finite positive number"):
+        parse_harbor_spec(path, where="swe")
+
+
 def test_collect_without_separate_is_rejected(tmp_path):
     path = _write_world(
         tmp_path,
